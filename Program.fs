@@ -13,15 +13,18 @@ let testString1 =
       (defun cdr (xs)
        (let (((head . tail) xs)) tail))
       (defun fib (m n l i)
+       (println n)
        (if (= i 0)
            l
            (fib n (+ m n) (n . l) (- i 1))))
       (defun test ()
        (let ((fibs (fib 1 1 '() 20)))
+        (println ((if nil '+ '-) 10 20))
         (cdr fibs)))"
 
 open Zipper
 open Parser
+open Data
 
 [<EntryPoint>]
 let main argv =

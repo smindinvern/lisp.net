@@ -126,17 +126,22 @@ module Tokenization =
     let tokens : Parser<char, unit, Token list> =
         parseUntilEOF token
 
+module Data =
+    type LispObject =
+        | LispList of LispObject list
+        | LispString of string
+        | LispInt of int
+        | LispFloat of double
+        | LispSymbol of string
+        | LispFunc of Func<LispObject list, LispObject>
+
 module Ast =
-    type Symbol = string
-    type Literal =
-        | IntLit of int
-        | FloatLit of double
-        | StringLit of string
-    type List = Expr list
-    and Expr =
-        | SymbolExpr of Symbol
-        | LiteralExpr of Literal
-        | ListExpr of List
+    open Data
+
+    type Expr =
+        | SymbolExpr of string
+        | LiteralExpr of LispObject
+        | ListExpr of Expr list
         | ConsExpr of Expr * Expr
         | LetExpr of (LetBinding list) * (Expr list)
         | CaseExpr of Expr * ((Pattern * (Expr list)) list)
@@ -144,14 +149,13 @@ module Ast =
         | QuotedExpr of Expr
     and LetBinding = Pattern * Expr
     and Pattern =
-        | SymbolPattern of Symbol
-        | LiteralPattern of Literal
+        | SymbolPattern of string
+        | LiteralPattern of LispObject
         | ListPattern of Pattern list
         | ConsPattern of Pattern * Pattern
     type ParamList = Pattern list
     
-    type Defun = Symbol * ParamList * (Expr list)
-    
+    type Defun = string * ParamList * (Expr list)
     type TopLevel = Defun list
 
     open Parser
@@ -168,21 +172,18 @@ module Ast =
                 return! error <| sprintf "Not a %A" t
             }
 
-    let lcase (s: string) =
-        s.ToLower()
-
-    let symbol : LispParser<Symbol> =
+    let symbol : LispParser<string> =
         parse {
             match! pop with
                 | Symbol s -> return s
                 | _ -> return! error "Not a symbol"
         }
-    let literal : LispParser<Literal> =
+    let literal : LispParser<LispObject> =
         parse {
             match! pop with
-                | IntLiteral i -> return IntLit i
-                | FloatLiteral f -> return FloatLit f
-                | StringLiteral s -> return StringLit s
+                | IntLiteral i -> return LispInt i
+                | FloatLiteral f -> return LispFloat f
+                | StringLiteral s -> return LispString s
                 | _ -> return! error "Not a literal"
         }
     let lParen : LispParser<unit> =
@@ -227,13 +228,7 @@ module Ast =
             return (head, tail)
         }
     and consCellExpr : LispParser<Expr> =
-        inParens <|
-            parse {
-                let! head = expr
-                do! ignore <@> %Dot
-                let! tail = expr
-                return ConsExpr (head, tail)
-            }
+        inParens (ConsExpr <@> consCell' expr)
     and listExpr : LispParser<Expr> =
         ListExpr <@> listExpr'
     and letBinding : LispParser<LetBinding> =
@@ -249,14 +244,14 @@ module Ast =
     and ifExpr : LispParser<Expr> =
         inParens <|
             parse {
-                match! lcase <@> symbol with
+                match! symbol with
                     | "if" -> return! mkIfExpr <@> expr <*> expr <*> (tryParse expr)
                     | _ -> return! error "Not an if expression"
             }
     and letExpr : LispParser<Expr> =
         inParens <|
             parse {
-                match! lcase <@> symbol with
+                match! symbol with
                     | "let" -> return! mkLetExpr <@> (list' letBinding false) <*> (many expr)
                     | _ -> return! error "Not a let expression"
             }
@@ -270,7 +265,7 @@ module Ast =
     and caseExpr : LispParser<Expr> =
         inParens <|
             parse {
-                match! lcase <@> symbol with
+                match! symbol with
                     | "case" -> return! mkCaseExpr <@> expr <*> (list' caseArm false)
                     | _ -> return! error "Not a case expression"
             }
@@ -297,27 +292,19 @@ module Ast =
     let defun : LispParser<Defun> =
         inParens <|
             parse {
-                match! lcase <@> symbol with
+                match! symbol with
                     | "defun" -> return! mkDefun <@> symbol <*> (list' pattern true) <*> (many expr)
                     | _ -> return! error "Not a defun"
                 }
 
     let topLevel : LispParser<TopLevel> = parseUntil isEOF defun
 
-type LispObject =
-    | LispList of LispObject list
-    | LispString of string
-    | LispInt of int
-    | LispFloat of double
-    | LispSymbol of string
-    | LispFunc of Func<LispObject list, LispObject>
+open Data
 
 let rec exprToObject (e: Ast.Expr) =
     match e with
         | Ast.SymbolExpr s -> LispSymbol s
-        | Ast.LiteralExpr (Ast.IntLit i) -> LispInt i
-        | Ast.LiteralExpr (Ast.FloatLit f) -> LispFloat f
-        | Ast.LiteralExpr (Ast.StringLit s) -> LispString s
+        | Ast.LiteralExpr x -> x
         | Ast.ListExpr es -> LispList (List.map exprToObject es)
         | _ -> failwith <| sprintf "Cannot translate to object: %A" e
 
@@ -351,12 +338,6 @@ module Scope =
 module Evaluation =
     open Ast
 
-    let litEq = function
-        | (IntLit i, LispInt i') -> i = i'
-        | (FloatLit f, LispFloat f') -> f = f'
-        | (StringLit s, LispString s') -> s = s'
-        | _ -> false
-
     let concatOptions<'a> (a: ('a list) option) (b: ('a list) option) =
         Option.bind (fun head -> Option.map (fun tail -> head @ tail) b) a
 
@@ -372,7 +353,7 @@ module Evaluation =
             | SymbolPattern s ->
                 Some [(s, obj)]
             | LiteralPattern l ->
-                if litEq (l, obj) then
+                if l = obj then
                     Some []
                 else
                     None
@@ -427,11 +408,7 @@ module Compilation =
                     match lookup s scope with
                         | Some(obj) -> (scope, obj)
                         | None -> failwith <| sprintf "Attempt to use free variable: %s" s
-            | LiteralExpr l ->
-                match l with
-                    | IntLit i -> fun x -> (x, LispInt i)
-                    | FloatLit f -> fun x -> (x, LispFloat f)
-                    | StringLit s -> fun x -> (x, LispString s)
+            | LiteralExpr l -> fun x -> (x, l)
             | ListExpr es -> compileListExpr es
             | LetExpr (bindings, es) -> compileLetExpr (bindings, es)
             | IfExpr (test, ifTrue, ifFalse) -> compileIfExpr test ifTrue ifFalse
@@ -483,7 +460,7 @@ module Compilation =
     and compileQuoted (q: Expr) : Compiled =
         fun scope -> (scope, exprToObject q)
 
-    let compileDefun (s: Symbol, paramList: ParamList, body: Expr list) : Compiled =
+    let compileDefun (s: string, paramList: ParamList, body: Expr list) : Compiled =
         let cbody = List.map compileExpr body
         let f (scope: Scope) (args: LispObject list) =
             let newScope = (bindInNewScope paramList args)::scope
@@ -522,41 +499,24 @@ module Compilation =
                 | _ -> failwith "- takes exactly two arguments"
         let F_minus = ("-", LispFunc (new Func<LispObject list, LispObject>(minus)))
 
-    open Builtins
-    
+        let private println =
+            function
+                | [LispString s] ->
+                    printfn "%s" s
+                    snd S_nil
+                | [LispInt i] ->
+                    printfn "%d" i
+                    snd S_nil
+                | [LispFloat f] ->
+                    printfn "%f" f
+                    snd S_nil
+                | x ->
+                    printfn "%A" x
+                    snd S_nil
+        let F_println = ("println", LispFunc (new Func<LispObject list, LispObject>(println)))
+
+        let scope : Scope = [new System.Collections.Generic.Dictionary<string, LispObject>(dict [S_t; S_nil; F_eq; F_plus; F_minus; F_println])]
+
     let compileTopLevel (t: TopLevel) : Scope =
         let compiled = List.map compileDefun t
-        List.fold (fun s c -> fst <| c s) [new System.Collections.Generic.Dictionary<string, LispObject>(dict [S_t; S_nil; F_eq; F_plus; F_minus])] compiled
-        
-//     type Ast =
-//         | ValueNode of Value
-//         | DefunNode of string * (Value list) * Ast
-//         | IfNode of Ast * Ast * (Ast option)
-//         | LetNode of ((string * Ast) list) * Ast
-//         | LetStarNode of (Value * Ast) list
-//         | SequenceNode of Ast list
-
-//     let rec evalSequence (body: Value list) : Ast =
-//         SequenceNode <| List.map eval_ body
-//     and evalBinding (binding: Value) : (string * Ast) =
-//         match binding with
-//             | ListValue [StringValue b; expr] -> (b, eval_ expr)
-//             | _ -> failwith "Not a valid binding"
-//     and eval_ (expr: Value) : Ast =
-//         match expr with
-//             | ListValue ((StringValue "defun")::(StringValue name)::(ListValue params_)::body) ->
-//                 DefunNode name params_ (evalSequence body)
-//             | ListValue ((StringValue "if")::v::t) ->
-//                 IfNode <| (eval_ v) (eval_ t) Option.None
-//             | ListValue ((StringValue "if")::v::t::f) ->
-//                 IfNode <| (eval_ v) (eval_ t) (Option.Some(eval_ f))
-//             | ListValue ((StringValue "let")::(ListValue bindings)::body) ->
-//                 LetNode (List.map evalBinding bindings) (eval body)
-//             | ListValue [StringValue "let*"; ListValue bindings] ->
-//                 let evalBind (binding: Value) =
-//                     match binding with
-//                         | ListValue [a; b] -> (a, eval_ b)
-//                         | _ -> failwith "Invalid let* binding"
-//                 LetStarNode (List.map evalBind bindings)
-//             | _ -> failwith "Invalid construct"
-            
+        List.fold (fun s c -> fst <| c s) Builtins.scope compiled
