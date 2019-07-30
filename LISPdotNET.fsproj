@@ -6,12 +6,18 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <Compile Include="Tokenization.fs" />
+    <Compile Include="Ast.fs" />
     <Compile Include="Parsing.fs" />
+    <Compile Include="Scope.fs" />
+    <Compile Include="Evaluation.fs" />
+    <Compile Include="Compilation.fs" />
     <Compile Include="Program.fs" />
   </ItemGroup>
 
   <ItemGroup>
-    <PackageReference Include="smindinvern.Parser" Version="0.1" />
+    <PackageReference Update="FSharp.Core" Version="4.6.2" />
+    <PackageReference Include="smindinvern.Parser" Version="[0.1.1,1.0)" />
   </ItemGroup>
 
 </Project>

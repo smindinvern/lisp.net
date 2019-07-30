@@ -24,7 +24,7 @@ let testString1 =
 
 open Zipper
 open Parser
-open Data
+open Ast
 
 [<EntryPoint>]
 let main argv =
@@ -36,7 +36,7 @@ let main argv =
             printfn "%A" tokens
             let arr = List.toArray tokens
             let tokenStream = new Zipper<Tokenization.Token>(ref arr, 0)
-            let (s, r) = runParser Ast.topLevel tokenStream ()
+            let (s, r) = runParser Parsing.topLevel tokenStream ()
             match r with
                 | Result.Ok(x) ->
                     printfn "%A" x
