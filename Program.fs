@@ -23,20 +23,18 @@ let testString1 =
         (cdr fibs)))"
 
 open Zipper
-open Parser
+open smindinvern.Parser
 open Ast
 
 [<EntryPoint>]
 let main argv =
-    let arr = Array.mapi (fun i c -> (c, i)) <| testString1.ToCharArray()
-    let tokenStream = new Zipper<char*int>(ref arr, 0)
-    let (s, r) = runParser Tokenization.tokens tokenStream ()
+    let ts = LineInfo.Tokenization.TokenizeString(testString1)
+    let (s, r) = Primitives.runParser Tokenization.tokens ts ()
     match r with
         | Result.Ok(tokens) ->
             printfn "%A" tokens
-            let arr = List.toArray tokens
-            let tokenStream = new Zipper<Tokenization.Token>(ref arr, 0)
-            let (s, r) = runParser Parsing.topLevel tokenStream ()
+            let ts = Tokenization.Tokenize(tokens)
+            let (s, r) = Primitives.runParser Parsing.topLevel ts ()
             match r with
                 | Result.Ok(x) ->
                     printfn "%A" x

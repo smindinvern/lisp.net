@@ -1,8 +1,6 @@
 module Tokenization
 
     open Utils
-    open Parser
-    open Parser.LineInfo
     
     type Token =
         | LParen
@@ -14,11 +12,20 @@ module Tokenization
         | FloatLiteral of double
         | Symbol of string
     
+    open smindinvern.Parser
+    open smindinvern.Parser.Types
+    open smindinvern.Parser.LineInfo
+    open smindinvern.Parser.Primitives
+    open smindinvern.Parser.Primitives.LineInfo
+    open smindinvern.Parser.Combinators
+    open smindinvern.Parser.Combinators.LineInfo
+    open smindinvern.Parser.Monad
+    
     type Tokenizer = Parser<char, unit, Token>
     
     let (~%) (c: char) =
         parse {
-            let! x = pop
+            let! x = pop1
             if x = c then
                 return c
             else
@@ -43,13 +50,13 @@ module Tokenization
     let stringLit : Tokenizer =
         parse {
             do! ignore <@> %'"'
-            let! cs = parseUntil (peek <=> (inject '"')) pop
+            let! cs = parseUntil (peek1 <=> (inject '"')) pop1
             do! ignore <@> %'"'
             return StringLiteral (new string(List.toArray cs))
         }
     let digit : Parser<char, unit, char> = 
         parse {
-            let! c = pop
+            let! c = pop1
             if System.Char.IsDigit(c) then
                 return c
             else
@@ -81,16 +88,16 @@ module Tokenization
         let isValidCharacter c =
             System.Char.IsLetterOrDigit(c) || c = '_' || c = '-' || c = '*' || c = '/'
         parse {
-            let! first = pop
+            let! first = pop1
             if isValidCharacter first && not(System.Char.IsDigit(first)) then
-                let! rest = parseUntil (isEOF <||> (not <@> (isValidCharacter <@> peek))) pop
+                let! rest = parseUntil (isEOF <||> (not <@> (isValidCharacter <@> peek1))) pop1
                 return Symbol (new string(List.toArray(first::rest)))
             else
                 return! error <| "Expected letter or '_', got '" + (string first) + "'."
         }
     let builtin : Tokenizer =
         parse {
-            let! c = pop
+            let! c = pop1
             if c = '+' || c = '-' || c = '*' || c = '/' || c = '=' then
                 return Symbol (new string([|c|]))
             else

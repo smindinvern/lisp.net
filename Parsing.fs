@@ -5,14 +5,19 @@ module Parsing
     open System
     
     open Tokenization
-    open Parser
     open Ast
+
+    open smindinvern.Parser
+    open smindinvern.Parser.Types
+    open smindinvern.Parser.Primitives
+    open smindinvern.Parser.Combinators
+    open smindinvern.Parser.Monad
     
     type LispParser<'a> = Parser<Token, unit, 'a>
     
     let (~%) (t: Token) : LispParser<Token> =
         parse {
-            let! t' = pop
+            let! t' = pop1
             if t' = t then
                 return t'
             else
@@ -21,13 +26,13 @@ module Parsing
     
     let symbol : LispParser<string> =
         parse {
-            match! pop with
+            match! pop1 with
                 | Symbol s -> return s
                 | t -> return! error <| sprintf "Expected Symbol, got %A" t
         }
     let literal : LispParser<LispObject> =
         parse {
-            match! pop with
+            match! pop1 with
                 | IntLiteral i -> return LispInt i
                 | FloatLiteral f -> return LispFloat f
                 | StringLiteral s -> return LispString s
