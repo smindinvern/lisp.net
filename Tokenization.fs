@@ -7,10 +7,10 @@ module Tokenization
         | RParen
         | SingleQuote
         | Dot
-        | StringLiteral of string
-        | IntLiteral of int
-        | FloatLiteral of double
-        | Symbol of string
+        | StringToken of string
+        | IntToken of int
+        | FloatToken of double
+        | SymbolToken of string
     
     open smindinvern.Parser
     open smindinvern.Parser.Types
@@ -52,7 +52,7 @@ module Tokenization
             do! ignore <@> %'"'
             let! cs = parseUntil (peek1 <=> (inject '"')) pop1
             do! ignore <@> %'"'
-            return StringLiteral (new string(List.toArray cs))
+            return StringToken (new string(List.toArray cs))
         }
     let digit : Parser<char, unit, char> = 
         parse {
@@ -77,9 +77,9 @@ module Tokenization
             if i.Length = 0 && f.Length = 0 then
                 return! error <| "Expected NumericLiteral"
             elif f.Length > 0 then
-                return FloatLiteral <| System.Double.Parse(s + i + f)
+                return FloatToken <| System.Double.Parse(s + i + f)
             else
-                return IntLiteral <| System.Int32.Parse(s + i)
+                return IntToken <| System.Int32.Parse(s + i)
         }
     
     let literal : Tokenizer = numericLit <|> stringLit
@@ -91,7 +91,7 @@ module Tokenization
             let! first = pop1
             if isValidCharacter first && not(System.Char.IsDigit(first)) then
                 let! rest = parseUntil (isEOF <||> (not <@> (isValidCharacter <@> peek1))) pop1
-                return Symbol (new string(List.toArray(first::rest)))
+                return SymbolToken (new string(List.toArray(first::rest)))
             else
                 return! error <| "Expected letter or '_', got '" + (string first) + "'."
         }
@@ -99,7 +99,7 @@ module Tokenization
         parse {
             let! c = pop1
             if c = '+' || c = '-' || c = '*' || c = '/' || c = '=' then
-                return Symbol (new string([|c|]))
+                return SymbolToken (new string([|c|]))
             else
                 return! error <| "Not a builtin"
         }

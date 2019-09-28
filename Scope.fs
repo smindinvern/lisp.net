@@ -4,15 +4,15 @@ module Scope
     
     open System.Collections.Generic
     
-    type Scope = System.Collections.Generic.Dictionary<string, LispObject> list
+    type Scope = System.Collections.Generic.Dictionary<string, LispData> list
     
-    type Binding = string * LispObject
+    type Binding = string * LispData
     
-    let rec lookup s : Scope -> LispObject option =
+    let rec lookup s : Scope -> LispData option =
         function
             | [] -> None
             | scope::hidden ->
-                let mutable x = LispInt 0
+                let mutable x = IntLiteral 0
                 if scope.TryGetValue(s, &x) then
                     Some(x)
                 else
@@ -24,6 +24,6 @@ module Scope
                 head.[s] <- v
                 head::tail
             | scope' ->
-                let x = new System.Collections.Generic.Dictionary<string, LispObject>()
+                let x = new System.Collections.Generic.Dictionary<string, LispData>()
                 x.[s] <- v
                 x::scope'

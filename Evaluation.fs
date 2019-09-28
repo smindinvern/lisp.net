@@ -8,11 +8,11 @@ module Evaluation
     open Scope
     
     let rec bindList = function
-        | (p::ps, LispList (o::os)) ->
-            concatOptions (bindPattern p o) (bindList (ps, LispList os))
-        | ([], LispList []) -> Some []
+        | (p::ps, List (o::os)) ->
+            concatOptions (bindPattern p o) (bindList (ps, List os))
+        | ([], List []) -> Some []
         | _ -> None
-    and bindPattern (pat: Pattern) (obj: LispObject) : (Binding list) option =
+    and bindPattern (pat: Pattern) (obj: LispData) : (Binding list) option =
         match pat with
             | SymbolPattern s ->
                 Some [(s, obj)]
@@ -24,13 +24,13 @@ module Evaluation
             | ListPattern ps -> bindList (ps, obj)
             | ConsPattern (head, tail) ->
                 match obj with
-                    | LispList (h::t) ->
-                        concatOptions (bindPattern head h) (bindPattern tail (LispList t))
+                    | List (h::t) ->
+                        concatOptions (bindPattern head h) (bindPattern tail (List t))
                     | _ -> None
     
     let rec eval (scope: Scope) = function
-        | LispSymbol s -> Option.map (fun x -> (scope, x)) (lookup s scope) 
-        | LispList (f::args) ->
+        | Symbol s -> Option.map (fun x -> (scope, x)) (lookup s scope) 
+        | List (f::args) ->
             match eval scope f with
                 | None -> None
                 | Some(scope', f') ->

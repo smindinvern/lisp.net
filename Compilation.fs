@@ -6,32 +6,32 @@ module Compilation
     
     open System
     
-    type Compiled = Scope -> (Scope * LispObject)
+    type Compiled = Scope -> (Scope * LispData)
     
     let rec exprToObject (e: Ast.Expr) =
         match e with
-            | Ast.SymbolExpr s -> LispSymbol s
+            | Ast.SymbolExpr s -> Symbol s
             | Ast.LiteralExpr x -> x
-            | Ast.ListExpr es -> LispList (List.map exprToObject es)
+            | Ast.ListExpr es -> List (List.map exprToObject es)
             | _ -> failwith <| sprintf "Cannot translate to object: %A" e
     
     let rec evalCompiledList (scope: Scope) =
         function
-            | [] -> (scope, LispSymbol "nil")
+            | [] -> (scope, Symbol "nil")
             | [last] -> last scope
             | head::tail ->
                 let (scope', _) = head scope
                 evalCompiledList scope' tail
     
-    let bindAll (p: Pattern list) (args: LispObject list) =
-        bindPattern (ListPattern p) (LispList args)
+    let bindAll (p: Pattern list) (args: LispData list) =
+        bindPattern (ListPattern p) (List args)
     
-    let bindInNewScope (p: Pattern list) (args: LispObject list) =
+    let bindInNewScope (p: Pattern list) (args: LispData list) =
         match bindAll p args with
             | None ->
                 failwith "Binding failed"
             | Some(bindings) ->
-                new System.Collections.Generic.Dictionary<string, LispObject>(dict bindings)
+                new System.Collections.Generic.Dictionary<string, LispData>(dict bindings)
     
     let rec compileExpr (e: Expr) : Compiled =
         match e with
@@ -52,7 +52,7 @@ module Compilation
                     let (scope, h) = hc scope
                     let (scope, t) = tc scope
                     match t with
-                        | LispList xs -> (scope, LispList (h::xs))
+                        | List xs -> (scope, List (h::xs))
                         | _ -> failwith <| sprintf "Cannot cons %A and %A" h t
             | _ -> failwith <| sprintf "%A: construct not supported" e
     and compileLetExpr (bindings: LetBinding list, es: Expr list) : Compiled =
@@ -68,8 +68,8 @@ module Compilation
         let cs = List.map compileExpr es
         fun scope ->
             match List.map (snd << ((|>) scope)) cs with
-                | [] -> (scope, LispList [])
-                | (LispSymbol f)::args ->
+                | [] -> (scope, List [])
+                | (Symbol f)::args ->
                     match lookup f scope with
                         | Some(LispFunc func) -> (scope, func.Invoke(args))
                         | _ -> failwith <| sprintf "%s is not a callable object" f
@@ -85,7 +85,7 @@ module Compilation
         let ifTrue' = compileExpr ifTrue
         let test' = compileExpr test
         fun scope ->
-            if (snd <| test' scope) <> (LispSymbol "nil") then
+            if (snd <| test' scope) <> (Symbol "nil") then
                 ifTrue' scope
             else
                 ifFalse' scope
@@ -94,60 +94,60 @@ module Compilation
     
     let compileDefun (s: string, paramList: ParamList, body: Expr list) : Compiled =
         let cbody = List.map compileExpr body
-        let f (scope: Scope) (args: LispObject list) =
+        let f (scope: Scope) (args: LispData list) =
             let newScope = (bindInNewScope paramList args)::scope
             let (newScope', obj) = evalCompiledList newScope cbody
             obj
         fun scope ->
-            let obj = LispFunc (new Func<LispObject list, LispObject>(f scope))
+            let obj = LispFunc (new Func<LispData list, LispData>(f scope))
             (Scope.add (s, obj) scope, obj)
     
     module Builtins =
-        let S_t = ("t", LispSymbol "t")
-        let S_nil = ("nil", LispSymbol "nil")
-        let private eq2 (obj1: LispObject) (obj2: LispObject) =
+        let S_t = ("t", Symbol "t")
+        let S_nil = ("nil", Symbol "nil")
+        let private eq2 (obj1: LispData) (obj2: LispData) =
             snd <| if obj1 = obj2 then S_t else S_nil
-        let private eq (objs: LispObject list) =
+        let private eq (objs: LispData list) =
             match objs with
                 | [obj1; obj2] -> eq2 obj1 obj2
                 | _ -> failwith "= takes exactly two arguments"
-        let F_eq = ("=", LispFunc (new Func<LispObject list, LispObject>(eq)))
+        let F_eq = ("=", LispFunc (new Func<LispData list, LispData>(eq)))
         let private plus =
             function
-                | [LispInt a; LispInt b] -> LispInt (a+b)
-                | [LispFloat a; LispFloat b] -> LispFloat (a+b)
-                | [LispInt a; LispFloat b] -> LispFloat ((float a) + b)
-                | [LispFloat a; LispInt b] -> LispFloat (a + (float b))
+                | [IntLiteral a; IntLiteral b] -> IntLiteral (a+b)
+                | [FloatLiteral a; FloatLiteral b] -> FloatLiteral (a+b)
+                | [IntLiteral a; FloatLiteral b] -> FloatLiteral ((float a) + b)
+                | [FloatLiteral a; IntLiteral b] -> FloatLiteral (a + (float b))
                 | [a; b] -> failwith <| sprintf "%A and %A are not both numeric values" a b
                 | _ -> failwith "+ takes exactly two arguments"
-        let F_plus = ("+", LispFunc (new Func<LispObject list, LispObject>(plus)))
+        let F_plus = ("+", LispFunc (new Func<LispData list, LispData>(plus)))
         let private minus =
             function
-                | [LispInt a; LispInt b] -> LispInt (a-b)
-                | [LispFloat a; LispFloat b] -> LispFloat (a-b)
-                | [LispInt a; LispFloat b] -> LispFloat ((float a) - b)
-                | [LispFloat a; LispInt b] -> LispFloat (a - (float b))
+                | [IntLiteral a; IntLiteral b] -> IntLiteral (a-b)
+                | [FloatLiteral a; FloatLiteral b] -> FloatLiteral (a-b)
+                | [IntLiteral a; FloatLiteral b] -> FloatLiteral ((float a) - b)
+                | [FloatLiteral a; IntLiteral b] -> FloatLiteral (a - (float b))
                 | [a; b] -> failwith <| sprintf "%A and %A are not both numeric values" a b
                 | _ -> failwith "- takes exactly two arguments"
-        let F_minus = ("-", LispFunc (new Func<LispObject list, LispObject>(minus)))
+        let F_minus = ("-", LispFunc (new Func<LispData list, LispData>(minus)))
     
         let private println =
             function
-                | [LispString s] ->
+                | [StringLiteral s] ->
                     printfn "%s" s
                     snd S_nil
-                | [LispInt i] ->
+                | [IntLiteral i] ->
                     printfn "%d" i
                     snd S_nil
-                | [LispFloat f] ->
+                | [FloatLiteral f] ->
                     printfn "%f" f
                     snd S_nil
                 | x ->
                     printfn "%A" x
                     snd S_nil
-        let F_println = ("println", LispFunc (new Func<LispObject list, LispObject>(println)))
+        let F_println = ("println", LispFunc (new Func<LispData list, LispData>(println)))
     
-        let scope : Scope = [new System.Collections.Generic.Dictionary<string, LispObject>(dict [S_t; S_nil; F_eq; F_plus; F_minus; F_println])]
+        let scope : Scope = [new System.Collections.Generic.Dictionary<string, LispData>(dict [S_t; S_nil; F_eq; F_plus; F_minus; F_println])]
     
     let compileTopLevel (t: TopLevel) : Scope =
         let compiled = List.map compileDefun t

@@ -25,6 +25,7 @@ let testString1 =
 open Zipper
 open smindinvern.Parser
 open Ast
+open Reader
 
 [<EntryPoint>]
 let main argv =
@@ -32,13 +33,14 @@ let main argv =
     let (s, r) = Primitives.runParser Tokenization.tokens ts ()
     match r with
         | Result.Ok(tokens) ->
-            printfn "%A" tokens
+            List.map (sprintf "%A") tokens |> String.concat "; " |> printfn "[%A]"
             let ts = Tokenization.Tokenize(tokens)
-            let (s, r) = Primitives.runParser Parsing.topLevel ts ()
+            let (s, r) = Primitives.runParser Reader.read ts ()
             match r with
                 | Result.Ok(x) ->
                     printfn "%A" x
-                    let compiled = Compilation.compileTopLevel x
+                    let parsed = Parsing.topLevel x
+                    let compiled = Compilation.compileTopLevel parsed
                     match Scope.lookup "test" compiled with
                         | Some(LispFunc f) ->
                             printfn "%A" (f.Invoke([]))

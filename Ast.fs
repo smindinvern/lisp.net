@@ -2,17 +2,19 @@ module Ast
 
     open System
     
-    type LispObject =
-        | LispList of LispObject list
-        | LispString of string
-        | LispInt of int
-        | LispFloat of double
-        | LispSymbol of string
-        | LispFunc of Func<LispObject list, LispObject>
+    type LispData =
+        | List of LispData list
+        | ConsCell of LispData * LispData
+        | IntLiteral of int
+        | FloatLiteral of float
+        | StringLiteral of string
+        | Symbol of string
+        | Quote of LispData
+        | LispFunc of Func<LispData list, LispData>
     
     type Expr =
         | SymbolExpr of string
-        | LiteralExpr of LispObject
+        | LiteralExpr of LispData
         | ListExpr of Expr list
         | ConsExpr of Expr * Expr
         | LetExpr of (LetBinding list) * (Expr list)
@@ -22,7 +24,7 @@ module Ast
     and LetBinding = Pattern * Expr
     and Pattern =
         | SymbolPattern of string
-        | LiteralPattern of LispObject
+        | LiteralPattern of LispData
         | ListPattern of Pattern list
         | ConsPattern of Pattern * Pattern
     type ParamList = Pattern list
