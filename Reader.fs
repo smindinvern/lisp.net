@@ -4,7 +4,7 @@ open Ast
 
 open Tokenization
 
-open smindinvern.Parser
+open smindinvern.Alternative
 open smindinvern.Parser.Types
 open smindinvern.Parser.Primitives
 open smindinvern.Parser.Combinators
@@ -48,30 +48,31 @@ let inParens<'a> (r: LispReader<'a>) : LispReader<'a> =
         do! rParen
         return x
     }
+//
+//let mutable consCell = Unchecked.defaultof<LispReader<LispData>>
+//let mutable lispList = Unchecked.defaultof<LispReader<LispData>>
+//let mutable quote = Unchecked.defaultof<LispReader<LispData>>
 
-open Zipper
-
-#nowarn "40"
 
 let rec consCell : LispReader<LispData> =
-    parse {
+    lazy ((inParens <| parse {
         let! left = lispData
         do! ignore <@> %Dot
         let! right = lispData
         return ConsCell (left, right)
-    }
+    }).Force())
 and lispList : LispReader<LispData> =
-    List <@> (inParens <| some lispData)
+    lazy ((List <@> (inParens <| some (lispDataOrConsCell))).Force())
 and quote : LispReader<LispData> =
-    parse {
+    lazy ((parse {
         match! pop1 with
-        | SingleQuote -> return! Quote <@> lispData
+        | SingleQuote -> return! Quote <@> (lispData)
         | t -> return! error <| sprintf "Expected Quote, got %A" t
-    }
-// Break recursion by inserting a lazy link in the cycle.
-and lispDataLazy : LispReader<LispData> Lazy =
-    lazy oneOf [ quote; consCell; lispList; symbol; literal ]
+    }).Force())
 and lispData : LispReader<LispData> =
-    lispDataLazy.Force()
-and read : LispReader<LispData list> =
-    parseUntil isEOF lispData
+    lazy (((quote) <|> (symbol) <|> (literal) <|> (lispList)).Force())
+and lispDataOrConsCell : LispReader<LispData> =
+    lazy (((lispData) <|> (consCell)).Force())
+    
+let read : LispReader<LispData list> =
+    parseUntil isEOF (lispDataOrConsCell)

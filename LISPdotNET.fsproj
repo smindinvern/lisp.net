@@ -13,12 +13,13 @@
     <Compile Include="Scope.fs" />
     <Compile Include="Evaluation.fs" />
     <Compile Include="Compilation.fs" />
+    <Compile Include="Macros.fs" />
     <Compile Include="Program.fs" />
   </ItemGroup>
 
   <ItemGroup>
     <PackageReference Update="FSharp.Core" Version="4.6.2" />
-    <PackageReference Include="smindinvern.Parser" Version="[0.2,1.0)" />
+    <PackageReference Include="smindinvern.Parser" Version="[0.3.0,1.0)" />
   </ItemGroup>
 
 </Project>

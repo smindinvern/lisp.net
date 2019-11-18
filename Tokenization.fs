@@ -1,18 +1,19 @@
 module Tokenization
 
-    open Utils
+    open smindinvern.Utils
     
     type Token =
         | LParen
         | RParen
         | SingleQuote
         | Dot
+        | Ellipsis
         | StringToken of string
         | IntToken of int
         | FloatToken of double
         | SymbolToken of string
     
-    open smindinvern.Parser
+    open smindinvern.Alternative
     open smindinvern.Parser.Types
     open smindinvern.Parser.LineInfo
     open smindinvern.Parser.Primitives
@@ -47,6 +48,7 @@ module Tokenization
     let rParen : Tokenizer = matchChar ')' RParen
     let singleQuote : Tokenizer = matchChar '\'' SingleQuote
     let dot : Tokenizer = matchChar '.' Dot
+    let ellipsis : Tokenizer = (konst (SymbolToken "...")) <@> %%"..."
     let stringLit : Tokenizer =
         parse {
             do! ignore <@> %'"'
@@ -108,6 +110,7 @@ module Tokenization
         oneOf [ lParen
             ; rParen
             ; singleQuote
+            ; ellipsis
             ; dot
             ; literal
             ; builtin

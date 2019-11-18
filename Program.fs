@@ -22,14 +22,31 @@ let testString1 =
         (println ((if nil '+ '-) 10 20))
         (cdr fibs)))"
 
-open Zipper
+let macroTest =
+    @"(define-syntax macro
+        (syntax-rules ()
+          ((macro (a b ...) ...)
+           ((a b) ... ...)
+          )
+        )
+      )"
+      
+let macroTest2 =
+    @"(define-syntax macro
+        (syntax-rules ()
+          ((macro (((z ...) ...) ((x ...) y) ...))
+           '((x y z) ... ...)
+          )
+        )
+      )"
+
 open smindinvern.Parser
 open Ast
-open Reader
+open Macros
 
 [<EntryPoint>]
 let main argv =
-    let ts = LineInfo.Tokenization.TokenizeString(testString1)
+    let ts = LineInfo.Tokenization.TokenizeString(macroTest2)
     let (s, r) = Primitives.runParser Tokenization.tokens ts ()
     match r with
         | Result.Ok(tokens) ->
@@ -39,12 +56,21 @@ let main argv =
             match r with
                 | Result.Ok(x) ->
                     printfn "%A" x
-                    let parsed = Parsing.topLevel x
-                    let compiled = Compilation.compileTopLevel parsed
-                    match Scope.lookup "test" compiled with
-                        | Some(LispFunc f) ->
-                            printfn "%A" (f.Invoke([]))
-                        | x -> printfn "Compilation error: %A" x
-                | Result.Error(e) -> printfn "%s" e
-        | Result.Error(e) -> printfn "%s" e
+                    match List.head x with
+                    | Ast.List xs ->
+                        let (_, m::_) = Parsing.defineSyntax xs
+                        printfn "%A" m
+                        // let result = m [ Symbol "macro"; Ast.List [ Symbol "a"; Symbol "b"; Symbol "c" ]; Ast.List [ Symbol "d"; Symbol "e"; Symbol "f" ] ]
+                        // let result = m [ Symbol "macro"; Ast.List <| List.map Symbol [ "a"; "b"; "c"; "d" ]; Ast.List <| List.map Symbol [ "e"; "f"; "g"; "h" ]; Ast.List <| List.map Symbol [ "i"; "j"; "k"; "l" ] ]
+                        let result = m [ Symbol "macro"; Ast.List [ Ast.List [ Ast.List [ Symbol "g"; Symbol "h" ]; Ast.List [ Symbol "i"; Symbol "j" ] ]; Ast.List [ Ast.List [ Symbol "a"; Symbol "b" ]; Symbol "c" ]; Ast.List [ Ast.List [ Symbol "d"; Symbol "e" ]; Symbol "f" ] ] ]
+                        printfn "%A" result
+                    | _ -> printf "Unexpected input: %A" x
+//                    let parsed = Parsing.topLevel x
+//                    let compiled = Compilation.compileTopLevel parsed
+//                    match Scope.lookup "test" compiled with
+//                        | Some(LispFunc f) ->
+//                            printfn "%A" (f.Invoke([]))
+//                        | x -> printfn "Compilation error: %A" x
+                | Result.Error(e) -> printfn "%s" <| e.ToString()
+        | Result.Error(e) -> printfn "%s" <| e.ToString()
     0 // return an integer exit code
