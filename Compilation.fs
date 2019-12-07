@@ -26,6 +26,10 @@ module Compilation
     let bindAll (p: Pattern list) (args: LispData list) =
         bindPattern (ListPattern p) (List args)
     
+    let addToScope (scope: Scope) (bindings: Binding list) =
+        let newScope = new System.Collections.Generic.Dictionary<string, LispData>(dict bindings)
+        newScope::scope
+    
     let bindInNewScope (p: Pattern list) (args: LispData list) =
         match bindAll p args with
             | None ->
@@ -43,6 +47,7 @@ module Compilation
             | LiteralExpr l -> fun x -> (x, l)
             | ListExpr es -> compileListExpr es
             | LetExpr (bindings, es) -> compileLetExpr (bindings, es)
+            | CaseExpr (p, arms) -> compileCaseExpr p arms
             | IfExpr (test, ifTrue, ifFalse) -> compileIfExpr test ifTrue ifFalse
             | QuotedExpr q -> compileQuoted q
             | ConsExpr (head, tail) ->
@@ -54,7 +59,8 @@ module Compilation
                     match t with
                         | List xs -> (scope, List (h::xs))
                         | _ -> failwith <| sprintf "Cannot cons %A and %A" h t
-            | _ -> failwith <| sprintf "%A: construct not supported" e
+            | LambdaExpr (parms, body) ->
+                compileLambda parms body
     and compileLetExpr (bindings: LetBinding list, es: Expr list) : Compiled =
         let (patterns, exprs) = List.unzip bindings
         let exprs' = List.map compileExpr exprs
@@ -64,6 +70,23 @@ module Compilation
             let newScope = (bindInNewScope patterns exprs'')::scope
             let (newScope', obj) = evalCompiledList newScope body
             (List.tail newScope', obj)
+    and compileCaseExpr (e: Expr) (arms: (Pattern * Expr list) list) =
+        let carms = List.map (fun (p, body) -> (p, List.map compileExpr body)) arms
+        let ce = compileExpr e
+        let rec eval (scope: Scope) (v: LispData) (carms: (Pattern * Compiled list) list) =
+            // try binding @e to each pattern in @arms until we find a match
+            match carms with
+            | (p, cbody)::carms' ->
+                match bindPattern p v with
+                | Option.Some(bindings) ->
+                    let (_, result) = evalCompiledList (addToScope scope bindings) cbody
+                    (scope, result)
+                | Option.None -> eval scope v carms'
+            | [] -> failwith "No match in case expression"
+        fun scope ->
+            let (_, v) = ce scope
+            eval scope v carms
+
     and compileListExpr (es: Expr list) : Compiled =
         let cs = List.map compileExpr es
         fun scope ->
@@ -91,16 +114,19 @@ module Compilation
                 ifFalse' scope
     and compileQuoted (q: Expr) : Compiled =
         fun scope -> (scope, exprToObject q)
-    
-    let compileDefun (s: string, paramList: ParamList, body: Expr list) : Compiled =
+    and compileLambda (paramList: Pattern list) (body: Expr list) =
         let cbody = List.map compileExpr body
         let f (scope: Scope) (args: LispData list) =
             let newScope = (bindInNewScope paramList args)::scope
-            let (newScope', obj) = evalCompiledList newScope cbody
-            obj
+            snd <| evalCompiledList newScope cbody
         fun scope ->
-            let obj = LispFunc (new Func<LispData list, LispData>(f scope))
-            (Scope.add (s, obj) scope, obj)
+            (scope, LispFunc (new Func<LispData list, LispData>(f scope)))
+    
+    let compileDefun (s: string, paramList: ParamList, body: Expr list) : Compiled =
+        let clambda = compileLambda paramList body
+        fun scope ->
+            let (scope', cfunc) = clambda scope
+            (Scope.add (s, cfunc) scope', cfunc)
     
     module Builtins =
         let S_t = ("t", Symbol "t")

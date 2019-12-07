@@ -31,6 +31,8 @@ module Parsing
                     LetExpr (List.map letBinding bindings, List.map expr body)
                 | [ Symbol "case"; e; List arms ] ->
                     CaseExpr (expr e, List.map caseArm arms)
+                | (Symbol "lambda")::(List paramList)::body ->
+                    LambdaExpr (List.map pattern paramList, List.map expr body)
                 | es ->
                     ListExpr <| List.map expr es
         | ConsCell (left, right) -> ConsExpr (expr left, expr right)
