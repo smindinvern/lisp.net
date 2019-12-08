@@ -131,31 +131,31 @@ module Transformers =
         else
             name
             
-    let rec renameIdentifiers (literals: string list) (names_seen: string list) (renames: (string * string) list) = function
+    let rec renameIdentifiers (bound: string list) (names_seen: string list) (renames: (string * string) list) = function
         | Ast.List xs ->
             let (x, y, zs) =
                 List.foldBack (fun t (names_seen, renames, xs) ->
-                                   let (x, y, z) = renameIdentifiers literals names_seen renames t
+                                   let (x, y, z) = renameIdentifiers bound names_seen renames t
                                    (x, y, z::xs)) xs (names_seen, renames, [])
             (x, y, Ast.List zs)
         | ConsCell (l, r) ->
-            let (x, y, l') = renameIdentifiers literals names_seen renames l
-            let (x, y, r') = renameIdentifiers literals x y r
+            let (x, y, l') = renameIdentifiers bound names_seen renames l
+            let (x, y, r') = renameIdentifiers bound x y r
             (x, y, ConsCell (l', r'))
         | Symbol s ->
-            if List.contains s literals then
-                (names_seen, renames, Symbol s)
-            else
+            if List.contains s bound then
                 let renamed = renameIdentifier names_seen s
                 (renamed::names_seen, (if renamed <> s then (s, renamed)::renames else renames), Symbol renamed)
+            else
+                (names_seen, renames, Symbol s)
         | Quote q ->
-            let (x, y, q') = renameIdentifiers literals names_seen renames q
+            let (x, y, q') = renameIdentifiers bound names_seen renames q
             (x, y, Quote q')
         | Ellipsis e ->
-            let (x, y, e') = renameIdentifiers literals names_seen renames e
+            let (x, y, e') = renameIdentifiers bound names_seen renames e
             (x, y, Ellipsis e')
         | x -> (names_seen, renames, x)
-
+    
     open Extensions
     
     let rec getEllipsisDepths = function
@@ -239,7 +239,7 @@ module Transformers =
         List.collect repeat ellipsized'
     
     let createTransformer (literals: string list) (bindings: Binding list) (template: LispData) =
-        let (renamed, renames, template') = renameIdentifiers literals [] [] template
+        let (renamed, renames, template') = renameIdentifiers (List.map (fun (Binding (k, _)) -> k) bindings) [] [] template
         let depths = getEllipsisDepths template'
         let bindings = reshapeBindings bindings renames (Seq.toList <| depths.KeyValuePairs())
         transform literals bindings template'
