@@ -77,6 +77,70 @@ let macroTestCase5 =
           List.head << read
           <| @"'((a d a b) (a d d c) (a d a e) (a d d f))"
     }
+    
+let macroTestCase6 =
+    { code =
+          @"(define-syntax macro6
+              (syntax-rules ()
+                ((macro6 ((a b c ...) ...))
+                  ((let ((a b))
+                     c ...
+                   ) ...
+                  )
+                )
+              )
+            )
+            (macro6 ((a b c d) (d c b a)))"
+    ; correctResult =
+        List.head << read
+        <| @"((let ((a b)) c d) (let ((d c)) b a))"
+    }
+
+let macroTestCase7 =
+    { code =
+          @"(define-syntax macro7
+              (syntax-rules ()
+                ((macro7 ((a b c ...) ...))
+                  ((let ((d b))
+                     a
+                     d
+                     c ...
+                   ) ...
+                  )
+                )
+              )
+            )
+            (macro6 ((a b c d) (d c b a)))"
+    ; correctResult =
+        Ast.List [
+            Ast.List [
+                Ast.Symbol "let";
+                Ast.List [
+                    Ast.List [
+                        Ast.Symbol "&d";
+                        Ast.Symbol "b"
+                    ]
+                ];
+                Ast.Symbol "a";
+                Ast.Symbol "&d";
+                Ast.Symbol "c";
+                Ast.Symbol "d"
+            ];
+            Ast.List [
+                Ast.Symbol "let";
+                Ast.List [
+                    Ast.List [
+                        Ast.Symbol "&d";
+                        Ast.Symbol "c"
+                    ]
+                ];
+                Ast.Symbol "d";
+                Ast.Symbol "&d";
+                Ast.Symbol "b";
+                Ast.Symbol "a"
+            ];
+        ]
+    }
 
 let testCase1 =
     { code = 
@@ -175,7 +239,7 @@ let lambdaTest2 =
 open Macros
 
 let testMacros =
-    for s in [macroTestCase1; macroTestCase2; macroTestCase3; macroTestCase4; macroTestCase5] do
+    for s in [macroTestCase1; macroTestCase2; macroTestCase3; macroTestCase4; macroTestCase5; macroTestCase6; macroTestCase7] do
         printfn "%s" (new System.String('-', 50))
         printfn "%s" s.code
         match Reader.read s.code with

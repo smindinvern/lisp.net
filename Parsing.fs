@@ -36,6 +36,7 @@ module Parsing
                 | es ->
                     ListExpr <| List.map expr es
         | ConsCell (left, right) -> ConsExpr (expr left, expr right)
+        | Ellipsis e -> EllipsizedExpr <| expr e
         | x -> LiteralExpr x
 
     let defun = function

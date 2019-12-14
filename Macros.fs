@@ -1,6 +1,7 @@
 ﻿module Macros
 
 open Ast
+open smindinvern
 open smindinvern.Parser
 
 // See R6RS sections 11.18 and 11.19.
@@ -130,51 +131,101 @@ module Transformers =
             renameIdentifier in_use (name + "\'")
         else
             name
-            
-    let rec renameIdentifiers (bound: string list) (names_seen: string list) (renames: (string * string) list) = function
-        | Ast.List xs ->
-            let (x, y, zs) =
-                List.foldBack (fun t (names_seen, renames, xs) ->
-                                   let (x, y, z) = renameIdentifiers bound names_seen renames t
-                                   (x, y, z::xs)) xs (names_seen, renames, [])
-            (x, y, Ast.List zs)
-        | ConsCell (l, r) ->
-            let (x, y, l') = renameIdentifiers bound names_seen renames l
-            let (x, y, r') = renameIdentifiers bound x y r
-            (x, y, ConsCell (l', r'))
+    
+    let rec renameIdentifiers' (bound: string list) (ld: LispData) (names_seen: string list, renames: (string * string) list) =
+        match ld with
         | Symbol s ->
             if List.contains s bound then
                 let renamed = renameIdentifier names_seen s
-                (renamed::names_seen, (if renamed <> s then (s, renamed)::renames else renames), Symbol renamed)
+                let x = if renamed <> s then ((s, renamed)::renames) else renames
+                (Symbol renamed, (renamed::names_seen, x))
             else
-                (names_seen, renames, Symbol s)
-        | Quote q ->
-            let (x, y, q') = renameIdentifiers bound names_seen renames q
-            (x, y, Quote q')
-        | Ellipsis e ->
-            let (x, y, e') = renameIdentifiers bound names_seen renames e
-            (x, y, Ellipsis e')
-        | x -> (names_seen, renames, x)
+                (Symbol s, (names_seen, renames))
+        | x -> foldLispData (renameIdentifiers' bound) (names_seen, renames) x
+    
+    let renameIdentifiers (bound: string list) (names_seen: string list) (renames: (string * string) list) (ld: LispData) =
+        renameIdentifiers' bound ld (names_seen, renames)
+
+    let rec renameInPattern' (literals: string list) (bound: string list) (pat: Pattern) (renamed: string list) =
+        match pat with
+        | SymbolPattern s ->
+            if List.contains s literals || List.contains s bound then
+                (SymbolPattern s, renamed)
+            else
+                (SymbolPattern ("&" + s), s::renamed)
+        | x -> foldPattern (renameInPattern' literals bound) renamed x
+    
+    let renameInPattern (literals: string list) (bound: string list) (pat: Pattern) =
+        renameInPattern' literals bound pat []
+    
+    let rec renameInExpr' (literals: string list) (bound: string list) (e: Expr) (let_bound: string list, names_seen: string list, renames: (string * string) list) =
+        match e with
+        | SymbolExpr s ->
+            if List.contains s bound then
+                let renamed = renameIdentifier names_seen s
+                let x = if renamed <> s then ((s, renamed)::renames) else renames
+                (SymbolExpr renamed, (let_bound, renamed::names_seen, x))
+            elif List.contains s let_bound then
+                let renamed = "&" + s
+                (SymbolExpr renamed, (let_bound, names_seen, renames))
+            else
+                (SymbolExpr s, (let_bound, names_seen, renames))
+        | LetExpr (bindings, body) ->
+            // Rename every identifier bound in @bindings that is NOT in @bound.
+            // Rename by prepending an '&', i.e. a character not allowed in identifiers,
+            // so that it *cannot* clash with a user-defined identifier.
+            let (pats, exprs) = List.unzip bindings
+            let (pats, renamed) = List.unzip <| List.map (renameInPattern literals bound) pats
+            // Flatten all renames to a single list.
+            let renamed = List.concat renamed
+            let bindings = List.zip pats exprs
+            // Apply renames to let-bound variables in body while we continue renaming identifiers.
+            let (result, (_, names_seen, renames)) = foldExpr (renameInExpr' literals bound) (renamed @ let_bound, names_seen, renames) (LetExpr (bindings, body))
+            (result, (let_bound, names_seen, renames))
+        | CaseExpr (e, cases) ->
+            let (e, (_, names_seen, renames)) = renameInExpr' literals bound e (let_bound, names_seen, renames)
+            let (pats, bodies) = List.unzip cases
+            let (pats, renamed) = List.unzip <| List.map (renameInPattern literals bound) pats
+            // Apply renames to case bodies.
+            let processBody (renamed, body) (results, let_bound, names_seen, renames) =
+                let (body, (_, names_seen, renames)) = foldExprList (renameInExpr' literals bound) body (renamed @ let_bound, names_seen, renames)
+                (body::results, let_bound, names_seen, renames)
+            let (bodies, _, names_seen, renames) =
+                List.foldBack processBody (List.zip renamed bodies) ([], let_bound, names_seen, renames)
+            (CaseExpr (e, List.zip pats bodies), (let_bound, names_seen, renames))
+        | LambdaExpr (args, body) ->
+            let (args, renamed) = List.unzip <| List.map (renameInPattern literals bound) args
+            let renamed = List.concat renamed
+            let (body, (_, names_seen, renames)) =
+                foldExprList (renameInExpr' literals bound) body (renamed @ let_bound, names_seen, renames)
+            (LambdaExpr (args, body), (let_bound, names_seen, renames))
+        | x -> foldExpr (renameInExpr' literals bound) (let_bound, names_seen, renames) x
+        
+    let renameInExpr (literals: string list) (bound: string list) (e: Expr) =
+        let (e, (_, names_seen, renames)) = renameInExpr' literals bound e ([], [], [])
+        (e, names_seen, renames)
     
     open Extensions
     
-    let rec getEllipsisDepths = function
+    let rec getEllipsisDepths' = function
         | Ast.List xs ->
-            let results = List.map getEllipsisDepths xs
-            dict <| Seq.collect Extensions.KeyValuePairs results
+            List.collect getEllipsisDepths' xs
         | ConsCell (l, r) ->
-            getEllipsisDepths (Ast.List [l; r])
+            getEllipsisDepths' (Ast.List [l; r])
         | Symbol s ->
-            dict [(s, 0)]
+            [(s, 0)]
         | Quote q ->
-            getEllipsisDepths q
+            getEllipsisDepths' q
         | Ellipsis e ->
-            let results = getEllipsisDepths e
-            dict <| Seq.map (fun (k, v) -> (k, v + 1)) (results.KeyValuePairs())
+            let results = getEllipsisDepths' e
+            List.map (fun (k, v) -> (k, v + 1)) results
+        | _ -> []
+    
+    let getEllipsisDepths x = dict <| getEllipsisDepths' x
     
     let rec getBindingEllipsisDepth = function
         | EllipsizedValue (v::_) -> (getBindingEllipsisDepth v) + 1
-        | Value v -> 0
+        | Value _ -> 0
     
     let rec repeatNTimes (v: Values) (n: int) =
         if n = 0 then
@@ -211,12 +262,10 @@ module Transformers =
         | ConsCell (l, r) ->
             ConsCell (transform literals bindings l, transform literals bindings r)
         | Symbol s ->
-            if List.contains s literals then
-                Symbol s
-            else
-                match bindings.[s] with
-                | Value v -> v
-                | _ -> failwith "Incorrect ellipsis depth."
+            match bindings.tryGetValue(s) with
+            | Option.None -> Symbol s
+            | Option.Some(Value v) -> v
+            | _ -> failwith "Incorrect ellipsis depth."
         | Quote q ->
             Quote (transform literals bindings q)
         | x -> x
@@ -238,8 +287,40 @@ module Transformers =
             | e -> [transform literals (dict bindings) e]
         List.collect repeat ellipsized'
     
+    let rec patternToData = function
+        | SymbolPattern s -> Symbol s
+        | Pattern.LiteralPattern data -> data
+        | ListPattern pats -> Ast.List <| List.map patternToData pats
+        | ConsPattern (l, r) -> ConsCell (patternToData l, patternToData r)
+    
+    let rec exprToData = function
+        | SymbolExpr s -> Symbol s
+        | LiteralExpr data -> data
+        | ListExpr es -> Ast.List <| List.map exprToData es
+        | ConsExpr (l, r) -> ConsCell (exprToData l, exprToData r)
+        | LetExpr (bindings, body) ->
+            let bindings = List.map (fun (pat, e) -> Ast.List [patternToData pat; exprToData e]) bindings
+            let body = List.map exprToData body
+            Ast.List ((Symbol "let")::(Ast.List bindings)::body)
+        | CaseExpr (e, arms) ->
+            let e = exprToData e
+            let arms = List.map (fun (pat, body) -> Ast.List ((patternToData pat)::(List.map exprToData body))) arms
+            Ast.List [Symbol "case"; e; Ast.List arms]
+        | IfExpr (e1, e2, e3) ->
+            let e1 = exprToData e1
+            let e2 = exprToData e2
+            Ast.List <| (Symbol "if")::e1::e2::(Option.toList <| Option.map exprToData e3)
+        | QuotedExpr q -> Quote <| exprToData q
+        | LambdaExpr (args, body) ->
+            let args = List.map patternToData args
+            let body = List.map exprToData body
+            Ast.List <| (Symbol "lambda")::(Ast.List args)::body
+        | EllipsizedExpr e -> Ellipsis <| exprToData e
+        
     let createTransformer (literals: string list) (bindings: Binding list) (template: LispData) =
-        let (renamed, renames, template') = renameIdentifiers (List.map (fun (Binding (k, _)) -> k) bindings) [] [] template
+        let templateExpr = Parsing.expr template
+        let (templateExpr', renamed, renames) = renameInExpr literals (List.map (fun (Binding (k, _)) -> k) bindings) templateExpr
+        let template' = exprToData templateExpr'
         let depths = getEllipsisDepths template'
         let bindings = reshapeBindings bindings renames (Seq.toList <| depths.KeyValuePairs())
         transform literals bindings template'

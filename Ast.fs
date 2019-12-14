@@ -11,7 +11,7 @@ module Ast
         | Symbol of string
         | Quote of LispData
         | LispFunc of Func<LispData list, LispData>
-        | Ellipsis of LispData
+        | Ellipsis of LispData  // This is only valid for macro templates.
         with
             member private x.ToStringBuilder(sb: Text.StringBuilder) =
                 match x with
@@ -34,6 +34,27 @@ module Ast
             override x.ToString() =
                 x.ToStringBuilder(new Text.StringBuilder()).ToString()
             
+    let rec foldLispData (f: LispData -> 'state -> (LispData * 'state)) (s: 'state) (ld: LispData) =
+        match ld with
+        | List xs ->
+            let folder x (xs, state) =
+                let (x, state) = f x state
+                (x::xs, state)
+            let (xs, s) =
+                List.foldBack folder xs ([], s)
+            (List xs, s)
+        | ConsCell (l, r) ->
+            let (ldl, s) = f l s
+            let (ldr, s) = f r s
+            (ConsCell (ldl, ldr), s)
+        | Quote q ->
+            let (q, s) = f q s
+            (Quote q, s)
+        | Ellipsis e ->
+            let (e, s) = f e s
+            (Ellipsis e, s)
+        | x -> (x, s)
+
     type Expr =
         | SymbolExpr of string
         | LiteralExpr of LispData
@@ -44,12 +65,72 @@ module Ast
         | IfExpr of Expr * Expr * (Expr option)
         | QuotedExpr of Expr
         | LambdaExpr of (Pattern list) * (Expr list)
+        | EllipsizedExpr of Expr  // This is only valid for macro templates.
     and LetBinding = Pattern * Expr
     and Pattern =
         | SymbolPattern of string
         | LiteralPattern of LispData
         | ListPattern of Pattern list
         | ConsPattern of Pattern * Pattern
+        
+    let rec foldPattern (f: Pattern -> 'state -> (Pattern * 'state)) (s: 'state) (pat: Pattern) =
+        match pat with
+        | ListPattern pats ->
+            let folder pat (pats, state) =
+                let (pat, state) = f pat state
+                (pat::pats, state)
+            let (pats, s) =
+                List.foldBack folder pats ([], s)
+            (ListPattern pats, s)
+        | ConsPattern (patl, patr) ->
+            let (patl, s) = f patl s
+            let (patr, s) = f patr s
+            (ConsPattern (patl, patr), s)
+        | x -> (x, s)
+    
+    let rec foldExpr (f: Expr -> 'state -> (Expr * 'state)) (s: 'state) (e: Expr) =
+        match e with
+        | ListExpr es ->
+            let (es, s) = foldExprList f es s
+            (ListExpr es, s)
+        | ConsExpr (el, er) ->
+            let (el, s) = f el s
+            let (er, s) = f er s
+            (ConsExpr (el, er), s)
+        | LetExpr (bindings, es) ->
+            let (es, s) = foldExprList f es s
+            (LetExpr (bindings, es), s)
+        | CaseExpr (e, cases) ->
+            let (e, s) = f e s
+            let (pats, bodies) = List.unzip cases
+            let (bodies, s) = foldExprListList f bodies s
+            (CaseExpr (e, List.zip pats bodies), s)
+        | IfExpr (e1, e2, e3) ->
+            let (e1, s) = f e1 s
+            let (e2, s) = f e2 s
+            match e3 with
+            | Option.None -> (IfExpr (e1, e2, Option.None), s)
+            | Option.Some(e3) ->
+                let (e3, s) = f e3 s
+                (IfExpr (e1, e2, Option.Some(e3)), s)
+        | QuotedExpr q ->
+            let (q, s) = f q s
+            (QuotedExpr q, s)
+        | LambdaExpr (pats, body) ->
+            let (body, s) = foldExprList f body s
+            (LambdaExpr (pats, body), s)
+        | EllipsizedExpr e ->
+            let (e, s) = f e s
+            (EllipsizedExpr e, s)
+        | x -> (x, s)
+    and private foldExprList' f g es s =
+        let folder e (es, state) =
+            let (e, state) = f g e state
+            (e::es, state)
+        List.foldBack folder es ([], s)
+    and internal foldExprList f es s = foldExprList' (<|) f es s
+    and internal foldExprListList f es s = foldExprList' foldExprList f es s       
+        
     type ParamList = Pattern list
     
     type Defun = string * ParamList * (Expr list)
