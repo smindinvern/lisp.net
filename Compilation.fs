@@ -5,15 +5,12 @@ module Compilation
     open Evaluation
     
     open System
-    
+
     type Compiled = Scope -> (Scope * LispData)
-    
-    let rec exprToObject (e: Ast.Expr) =
-        match e with
-            | Ast.SymbolExpr s -> Symbol s
-            | Ast.LiteralExpr x -> x
-            | Ast.ListExpr es -> List (List.map exprToObject es)
-            | _ -> failwith <| sprintf "Cannot translate to object: %A" e
+
+    open Macros.Extensions
+
+    open System.Collections.Generic
     
     let rec evalCompiledList (scope: Scope) =
         function
@@ -24,10 +21,10 @@ module Compilation
                 evalCompiledList scope' tail
     
     let bindAll (p: Pattern list) (args: LispData list) =
-        bindPattern (ListPattern p) (List args)
+        bindPattern (ListPattern p) (Ast.List args)
     
     let addToScope (scope: Scope) (bindings: Binding list) =
-        let newScope = new System.Collections.Generic.Dictionary<string, LispData>(dict bindings)
+        let newScope = new Dictionary<string, LispData>(dict bindings)
         newScope::scope
     
     let bindInNewScope (p: Pattern list) (args: LispData list) =
@@ -35,9 +32,9 @@ module Compilation
             | None ->
                 failwith "Binding failed"
             | Some(bindings) ->
-                new System.Collections.Generic.Dictionary<string, LispData>(dict bindings)
+                new Dictionary<string, LispData>(dict bindings)
     
-    let rec compileExpr (e: Expr) : Compiled =
+    let rec compileExpr (macros: IDictionary<string, Macros.Types.Macro>) (e: Expr) : Compiled =
         match e with
             | SymbolExpr s ->
                 fun scope ->
@@ -45,34 +42,42 @@ module Compilation
                         | Some(obj) -> (scope, obj)
                         | None -> failwith <| sprintf "Attempt to use free variable: %s" s
             | LiteralExpr l -> fun x -> (x, l)
-            | ListExpr es -> compileListExpr es
-            | LetExpr (bindings, es) -> compileLetExpr (bindings, es)
-            | CaseExpr (p, arms) -> compileCaseExpr p arms
-            | IfExpr (test, ifTrue, ifFalse) -> compileIfExpr test ifTrue ifFalse
+            | ListExpr es ->
+                match es with
+                    | (SymbolExpr keyword)::args ->
+                        match macros.tryGetValue(keyword) with
+                            | Option.Some(macro) ->
+                                let ld = macro.Transformer <| List.map exprToData es
+                                compileExpr macros (Parsing.expr ld)
+                            | Option.None -> compileListExpr macros es
+                    | _ -> compileListExpr macros es
+            | LetExpr (bindings, es) -> compileLetExpr macros (bindings, es)
+            | CaseExpr (p, arms) -> compileCaseExpr macros p arms
+            | IfExpr (test, ifTrue, ifFalse) -> compileIfExpr macros test ifTrue ifFalse
             | QuotedExpr q -> compileQuoted q
             | ConsExpr (head, tail) ->
-                let hc = compileExpr head
-                let tc = compileExpr tail
+                let hc = compileExpr macros head
+                let tc = compileExpr macros tail
                 fun scope ->
                     let (scope, h) = hc scope
                     let (scope, t) = tc scope
                     match t with
-                        | List xs -> (scope, List (h::xs))
+                        | Ast.List xs -> (scope, Ast.List (h::xs))
                         | _ -> failwith <| sprintf "Cannot cons %A and %A" h t
             | LambdaExpr (parms, body) ->
-                compileLambda parms body
-    and compileLetExpr (bindings: LetBinding list, es: Expr list) : Compiled =
+                compileLambda macros parms body
+    and compileLetExpr (macros: IDictionary<string, Macros.Types.Macro>) (bindings: LetBinding list, es: Expr list) : Compiled =
         let (patterns, exprs) = List.unzip bindings
-        let exprs' = List.map compileExpr exprs
-        let body = List.map compileExpr es
+        let exprs' = List.map (compileExpr macros) exprs
+        let body = List.map (compileExpr macros) es
         fun scope ->
             let exprs'' = List.map (snd << ((|>) scope)) exprs'
             let newScope = (bindInNewScope patterns exprs'')::scope
             let (newScope', obj) = evalCompiledList newScope body
             (List.tail newScope', obj)
-    and compileCaseExpr (e: Expr) (arms: (Pattern * Expr list) list) =
-        let carms = List.map (fun (p, body) -> (p, List.map compileExpr body)) arms
-        let ce = compileExpr e
+    and compileCaseExpr (macros: IDictionary<string, Macros.Types.Macro>) (e: Expr) (arms: (Pattern * Expr list) list) =
+        let carms = List.map (fun (p, body) -> (p, List.map (compileExpr macros) body)) arms
+        let ce = compileExpr macros e
         let rec eval (scope: Scope) (v: LispData) (carms: (Pattern * Compiled list) list) =
             // try binding @e to each pattern in @arms until we find a match
             match carms with
@@ -87,11 +92,11 @@ module Compilation
             let (_, v) = ce scope
             eval scope v carms
 
-    and compileListExpr (es: Expr list) : Compiled =
-        let cs = List.map compileExpr es
+    and compileListExpr (macros: IDictionary<string, Macros.Types.Macro>) (es: Expr list) : Compiled =
+        let cs = List.map (compileExpr macros) es
         fun scope ->
             match List.map (snd << ((|>) scope)) cs with
-                | [] -> (scope, List [])
+                | [] -> (scope, Ast.List [])
                 | (Symbol f)::args ->
                     match lookup f scope with
                         | Some(LispFunc func) -> (scope, func.Invoke(args))
@@ -99,31 +104,31 @@ module Compilation
                 | (LispFunc func)::args ->
                     (scope, func.Invoke(args))
                 | x::_ -> failwith <| sprintf "%A is not a callable object" x
-    and compileIfExpr (test: Expr) (ifTrue: Expr) (ifFalse: Expr option) : Compiled =
+    and compileIfExpr (macros: IDictionary<string, Macros.Types.Macro>) (test: Expr) (ifTrue: Expr) (ifFalse: Expr option) : Compiled =
         let ifFalse' =
-            compileExpr <|
+            compileExpr macros <|
             match ifFalse with
                 | Some(x) -> x
                 | None -> SymbolExpr "nil"
-        let ifTrue' = compileExpr ifTrue
-        let test' = compileExpr test
+        let ifTrue' = compileExpr macros ifTrue
+        let test' = compileExpr macros test
         fun scope ->
             if (snd <| test' scope) <> (Symbol "nil") then
                 ifTrue' scope
             else
                 ifFalse' scope
     and compileQuoted (q: Expr) : Compiled =
-        fun scope -> (scope, exprToObject q)
-    and compileLambda (paramList: Pattern list) (body: Expr list) =
-        let cbody = List.map compileExpr body
+        fun scope -> (scope, exprToData q)
+    and compileLambda (macros: IDictionary<string, Macros.Types.Macro>) (paramList: Pattern list) (body: Expr list) =
+        let cbody = List.map (compileExpr macros) body
         let f (scope: Scope) (args: LispData list) =
             let newScope = (bindInNewScope paramList args)::scope
             snd <| evalCompiledList newScope cbody
         fun scope ->
             (scope, LispFunc (new Func<LispData list, LispData>(f scope)))
     
-    let compileDefun (s: string, paramList: ParamList, body: Expr list) : Compiled =
-        let clambda = compileLambda paramList body
+    let compileDefun (macros: IDictionary<string, Macros.Types.Macro>) (s: string, paramList: ParamList, body: Expr list) : Compiled =
+        let clambda = compileLambda macros paramList body
         fun scope ->
             let (scope', cfunc) = clambda scope
             (Scope.add (s, cfunc) scope', cfunc)
@@ -175,6 +180,6 @@ module Compilation
     
         let scope : Scope = [new System.Collections.Generic.Dictionary<string, LispData>(dict [S_t; S_nil; F_eq; F_plus; F_minus; F_println])]
     
-    let compileTopLevel (t: TopLevel) : Scope =
-        let compiled = List.map compileDefun t
+    let compileTopLevel (macros: IDictionary<string, Macros.Types.Macro>) (t: TopLevel) : Scope =
+        let compiled = List.map (compileDefun macros) t
         List.fold (fun s c -> fst <| c s) Builtins.scope compiled

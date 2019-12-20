@@ -104,7 +104,9 @@ let macroTestCase7 =
                   ((let ((d b))
                      a
                      d
-                     c ...
+                     (let ((e '(c ...)))
+                       e
+                     )
                    ) ...
                   )
                 )
@@ -219,6 +221,30 @@ let testCase3 =
     ; correctResult = Ast.IntLiteral 12
     }
 
+let testCase4 =
+    { code =
+          @"(define-syntax quote
+              (syntax-rules ()
+                ((quote x)
+                 'x
+                )
+              )
+            )
+            (define-syntax map
+              (syntax-rules ()
+                ((map f (xs ...))
+                 (quote ((f xs) ...))
+                )
+              )
+            )
+            (defun test ()
+              (let ((f (lambda (x) (+ x 1))))
+                (map f (1 2 3 4 5))
+              )
+            )"
+      ; correctResult = Ast.Quote <| Ast.List (List.map Ast.IntLiteral [2; 3; 4; 5; 6])
+    }
+
 let lambdaTest2 =
     @"(defun f (x y)
         (let ((g (lambda (z)
@@ -236,7 +262,18 @@ let lambdaTest2 =
         (f 2 4)
       )"
 
-open Macros
+open Ast
+
+let defun ld (macros, defuns) =
+    match ld with
+    | List ((Symbol "defun")::(Symbol name)::(List paramList)::body) ->
+        (macros, (name, List.map Parsing.pattern paramList, List.map Parsing.expr body)::defuns)
+    | List ((Symbol "define-syntax")::rest) ->
+        ((Macros.Parsing.defineSyntax <| (Symbol "define-syntax")::rest)::macros, defuns)
+    | x -> failwith <| sprintf "Expected defun expression, got %A" x
+
+let topLevel defuns = List.foldBack defun defuns ([], [])
+
 
 let testMacros =
     for s in [macroTestCase1; macroTestCase2; macroTestCase3; macroTestCase4; macroTestCase5; macroTestCase6; macroTestCase7] do
@@ -244,22 +281,25 @@ let testMacros =
         printfn "%s" s.code
         match Reader.read s.code with
         | [ Ast.List macroDef; Ast.List macroUse ] ->
-            let (_, m::_) = Parsing.defineSyntax macroDef
-            match m macroUse with
-            | Result.Ok(x) ->
+            let m = Macros.Parsing.defineSyntax macroDef
+            try
+                let x = m.Transformer macroUse
                 printfn "Expected:\n%s" (s.correctResult.ToString())
                 printfn "Got:\n%s" (x.ToString())
                 printfn "%s" (if s.correctResult = x then "PASS" else "FAIL")
-            | x -> printfn "%A" x
+            with
+            | e -> printfn "%A" e
         | _ -> printf "Unexpected input"
 
 let testFunctions =
-    for tc in [testCase1; testCase2; testCase3] do
+    for tc in [testCase1; testCase2; testCase3; testCase4] do
         printfn "%s" (new System.String('-', 50))
         printfn "%s" tc.code
         let data = Reader.read tc.code
-        let tl = Parsing.topLevel data
-        let ctl = Compilation.compileTopLevel tl
+        let (macros, defuns) = topLevel data
+        let macros = dict <| List.map (fun (m: Macros.Types.Macro) -> (m.Keyword, m)) macros
+        printfn "%A" defuns
+        let ctl = Compilation.compileTopLevel macros defuns
         match Scope.lookup "test" ctl with
         | Option.Some(test) ->
             match Evaluation.eval ctl (Ast.List [test]) with

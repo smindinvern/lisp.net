@@ -38,11 +38,3 @@ module Parsing
         | ConsCell (left, right) -> ConsExpr (expr left, expr right)
         | Ellipsis e -> EllipsizedExpr <| expr e
         | x -> LiteralExpr x
-
-    let defun = function
-        | List ((Symbol "defun")::(Symbol name)::(List paramList)::body) ->
-            (name, List.map pattern paramList, List.map expr body)
-        | x -> failwith <| sprintf "Expected defun expression, got %A" x
-            
-
-    let topLevel defuns = List.map defun defuns

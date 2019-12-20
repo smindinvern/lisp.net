@@ -130,6 +130,36 @@ module Ast
         List.foldBack folder es ([], s)
     and internal foldExprList f es s = foldExprList' (<|) f es s
     and internal foldExprListList f es s = foldExprList' foldExprList f es s       
+
+    let rec patternToData = function
+        | SymbolPattern s -> Symbol s
+        | Pattern.LiteralPattern data -> data
+        | ListPattern pats -> List <| List.map patternToData pats
+        | ConsPattern (l, r) -> ConsCell (patternToData l, patternToData r)
+
+    let rec exprToData = function
+        | SymbolExpr s -> Symbol s
+        | LiteralExpr data -> data
+        | ListExpr es -> List <| List.map exprToData es
+        | ConsExpr (l, r) -> ConsCell (exprToData l, exprToData r)
+        | LetExpr (bindings, body) ->
+            let bindings = List.map (fun (pat, e) -> List [patternToData pat; exprToData e]) bindings
+            let body = List.map exprToData body
+            List ((Symbol "let")::(List bindings)::body)
+        | CaseExpr (e, arms) ->
+            let e = exprToData e
+            let arms = List.map (fun (pat, body) -> List ((patternToData pat)::(List.map exprToData body))) arms
+            List [Symbol "case"; e; List arms]
+        | IfExpr (e1, e2, e3) ->
+            let e1 = exprToData e1
+            let e2 = exprToData e2
+            List <| (Symbol "if")::e1::e2::(Option.toList <| Option.map exprToData e3)
+        | QuotedExpr q -> Quote <| exprToData q
+        | LambdaExpr (args, body) ->
+            let args = List.map patternToData args
+            let body = List.map exprToData body
+            List <| (Symbol "lambda")::(List args)::body
+        | EllipsizedExpr e -> Ellipsis <| exprToData e
         
     type ParamList = Pattern list
     

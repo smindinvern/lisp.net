@@ -125,6 +125,113 @@ module PatternMatching =
 
 module Transformers =
     open Types
+
+    open System.Collections.Generic
+    open Extensions
+
+    let rec patternVars = function
+        | SymbolPattern s -> [s]
+        | Pattern.LiteralPattern _ -> []
+        | ListPattern ps -> List.collect patternVars ps
+        | ConsPattern (pl, pr) -> List.collect patternVars [pl; pr]
+
+    let mutable i = 1
+
+    let nextI () =
+        let i' = i
+        i <- i + 1
+        i'
+
+    let getBoundVars (boundInTemplate: string list) pat =
+        patternVars pat
+        |> List.filter (not << (Utils.flip List.contains <| boundInTemplate))
+
+    let renameNewBindings (boundVars: string list) (rename: string -> string) =
+        let renames = List.map (fun s -> (s, sprintf "#%d" <| nextI())) boundVars
+        let renamesDict = dict renames
+        fun s ->
+            match renamesDict.tryGetValue(s) with
+                | Option.Some(v) -> v
+                | Option.None -> rename s
+
+    let rec renameInPatternThunk : Pattern -> ((string -> string) -> LispData) = function
+        | SymbolPattern s -> fun rename -> Symbol <| rename s
+        | Pattern.LiteralPattern d -> fun _ -> d
+        | ListPattern pats ->
+            let thunks = List.map renameInPatternThunk pats
+            fun rename -> Ast.List (List.map ((|>) rename) thunks)
+        | ConsPattern (l, r) ->
+            let lthunk = renameInPatternThunk l
+            let rthunk = renameInPatternThunk r
+            fun rename -> ConsCell (lthunk rename, rthunk rename)
+
+    let rec renameInBindingThunk (boundVars: string list) (pat, e) =
+        let patThunk = renameInPatternThunk pat
+        let exprThunk = renameNewBindingsThunk boundVars e
+        fun rename ->
+            (patThunk rename, exprThunk rename)
+
+    and renameInCaseArmThunk (boundVars: string list) (pat, body) : ((string -> string) -> LispData) =
+        let newBoundVars = getBoundVars boundVars pat
+        let bodyThunks = List.map (renameNewBindingsThunk boundVars) body
+        let patThunk = renameInPatternThunk pat
+        fun rename ->
+            let rename = renameNewBindings newBoundVars rename
+            let newPat = patThunk rename
+            let newBody = List.map ((|>) rename) bodyThunks
+            Ast.List <| newPat::newBody
+            
+    and renameNewBindingsThunk (boundVars: string list) : Expr -> ((string -> string) -> LispData) = function
+        | SymbolExpr s ->
+            fun rename -> Symbol <| rename s
+        | LetExpr (bindings, body) ->
+            // Rename every identifier bound in @bindings that is NOT in @boundVars.
+            // This is to prevent bindings introduced by the macro from shadowing
+            // any other identifiers.
+            let newBoundVars = List.collect (getBoundVars boundVars) (List.map (fun (pat, _) -> pat) bindings)
+            let bodyThunks = List.map (renameNewBindingsThunk boundVars) body
+            let bindingsThunks = List.map (renameInBindingThunk boundVars) bindings
+            fun rename ->
+                let rename = renameNewBindings newBoundVars rename
+                let bindings = List.map ((|>) rename) bindingsThunks
+                let body = List.map ((|>) rename) bodyThunks
+                Ast.List <| (Symbol "let")::(Ast.List <| List.map (fun (x, y) -> Ast.List [x; y]) bindings)::body
+        | CaseExpr (e, arms) ->
+            let exprThunk = renameNewBindingsThunk boundVars e
+            let armThunks = List.map (renameInCaseArmThunk boundVars) arms
+            fun rename -> Ast.List <| (Symbol "case")::(exprThunk rename)::(List.map ((|>) rename) armThunks)
+        | LambdaExpr (pats, body) ->
+            let newBoundVars = List.collect (getBoundVars boundVars) pats
+            let bodyThunks = List.map (renameNewBindingsThunk boundVars) body
+            let patThunks = List.map (renameInPatternThunk) pats
+            fun rename ->
+                let rename = renameNewBindings newBoundVars rename
+                let newPats = List.map ((|>) rename) patThunks
+                let newBody = List.map ((|>) rename) bodyThunks
+                Ast.List <| (Symbol "lambda")::(Ast.List newPats)::newBody
+        | LiteralExpr d -> fun _ -> d
+        | ListExpr es ->
+            let thunks = List.map (renameNewBindingsThunk boundVars) es
+            fun rename -> Ast.List (List.map ((|>) rename) thunks)
+        | ConsExpr (l, r) ->
+            let lthunk = renameNewBindingsThunk boundVars l
+            let rthunk = renameNewBindingsThunk boundVars r
+            fun rename -> ConsCell (lthunk rename, rthunk rename)
+        | IfExpr (e1, e2, e3) ->
+            let e1thunk = renameNewBindingsThunk boundVars e1
+            let e2thunk = renameNewBindingsThunk boundVars e2
+            let e3thunk = Option.map (renameNewBindingsThunk boundVars) e3
+            fun rename ->
+                let e1 = e1thunk rename
+                let e2 = e2thunk rename
+                let e3 = Option.map ((|>) rename) e3thunk
+                Ast.List <| (Symbol "if")::e1::e2::(Option.toList e3)
+        | QuotedExpr q ->
+            let thunk = renameNewBindingsThunk boundVars q
+            fun rename -> Quote <| thunk rename
+        | EllipsizedExpr e ->
+            let thunk = renameNewBindingsThunk boundVars e
+            fun rename -> Ellipsis <| thunk rename
             
     let rec renameIdentifier (in_use: string list) (name: string) =
         if List.contains name in_use then
@@ -145,65 +252,6 @@ module Transformers =
     
     let renameIdentifiers (bound: string list) (names_seen: string list) (renames: (string * string) list) (ld: LispData) =
         renameIdentifiers' bound ld (names_seen, renames)
-
-    let rec renameInPattern' (literals: string list) (bound: string list) (pat: Pattern) (renamed: string list) =
-        match pat with
-        | SymbolPattern s ->
-            if List.contains s literals || List.contains s bound then
-                (SymbolPattern s, renamed)
-            else
-                (SymbolPattern ("&" + s), s::renamed)
-        | x -> foldPattern (renameInPattern' literals bound) renamed x
-    
-    let renameInPattern (literals: string list) (bound: string list) (pat: Pattern) =
-        renameInPattern' literals bound pat []
-    
-    let rec renameInExpr' (literals: string list) (bound: string list) (e: Expr) (let_bound: string list, names_seen: string list, renames: (string * string) list) =
-        match e with
-        | SymbolExpr s ->
-            if List.contains s bound then
-                let renamed = renameIdentifier names_seen s
-                let x = if renamed <> s then ((s, renamed)::renames) else renames
-                (SymbolExpr renamed, (let_bound, renamed::names_seen, x))
-            elif List.contains s let_bound then
-                let renamed = "&" + s
-                (SymbolExpr renamed, (let_bound, names_seen, renames))
-            else
-                (SymbolExpr s, (let_bound, names_seen, renames))
-        | LetExpr (bindings, body) ->
-            // Rename every identifier bound in @bindings that is NOT in @bound.
-            // Rename by prepending an '&', i.e. a character not allowed in identifiers,
-            // so that it *cannot* clash with a user-defined identifier.
-            let (pats, exprs) = List.unzip bindings
-            let (pats, renamed) = List.unzip <| List.map (renameInPattern literals bound) pats
-            // Flatten all renames to a single list.
-            let renamed = List.concat renamed
-            let bindings = List.zip pats exprs
-            // Apply renames to let-bound variables in body while we continue renaming identifiers.
-            let (result, (_, names_seen, renames)) = foldExpr (renameInExpr' literals bound) (renamed @ let_bound, names_seen, renames) (LetExpr (bindings, body))
-            (result, (let_bound, names_seen, renames))
-        | CaseExpr (e, cases) ->
-            let (e, (_, names_seen, renames)) = renameInExpr' literals bound e (let_bound, names_seen, renames)
-            let (pats, bodies) = List.unzip cases
-            let (pats, renamed) = List.unzip <| List.map (renameInPattern literals bound) pats
-            // Apply renames to case bodies.
-            let processBody (renamed, body) (results, let_bound, names_seen, renames) =
-                let (body, (_, names_seen, renames)) = foldExprList (renameInExpr' literals bound) body (renamed @ let_bound, names_seen, renames)
-                (body::results, let_bound, names_seen, renames)
-            let (bodies, _, names_seen, renames) =
-                List.foldBack processBody (List.zip renamed bodies) ([], let_bound, names_seen, renames)
-            (CaseExpr (e, List.zip pats bodies), (let_bound, names_seen, renames))
-        | LambdaExpr (args, body) ->
-            let (args, renamed) = List.unzip <| List.map (renameInPattern literals bound) args
-            let renamed = List.concat renamed
-            let (body, (_, names_seen, renames)) =
-                foldExprList (renameInExpr' literals bound) body (renamed @ let_bound, names_seen, renames)
-            (LambdaExpr (args, body), (let_bound, names_seen, renames))
-        | x -> foldExpr (renameInExpr' literals bound) (let_bound, names_seen, renames) x
-        
-    let renameInExpr (literals: string list) (bound: string list) (e: Expr) =
-        let (e, (_, names_seen, renames)) = renameInExpr' literals bound e ([], [], [])
-        (e, names_seen, renames)
     
     open Extensions
     
@@ -232,7 +280,8 @@ module Transformers =
             v
         else
             repeatNTimes (Repeat v) (n - 1)
-    
+
+    // Add repeats to ellipsized bindings to replicate inputs as necessary.
     let reshapeBindings (bindings: Binding list) (renames: (string * string) list) (depths: (string * int) list) =
         let bindingsDict = dict <| List.map (fun (Binding (name, v)) -> (name, v)) bindings
         let copies = List.map (fun (old_name, new_name) -> (new_name, bindingsDict.[old_name])) renames
@@ -242,8 +291,6 @@ module Transformers =
             (name, repeatNTimes v ((depths.[name]) - (getBindingEllipsisDepth v)))
         dict <| Seq.map reshape bindings 
                 
-    open System.Collections.Generic
-    
     let splitBindings (xs: (string * Values) list) =
         let (constants, ellipses, repeats) =
             List.unzip3 <|
@@ -255,7 +302,7 @@ module Transformers =
         (List.collect Option.toList constants,
          List.collect Option.toList ellipses,
          List.collect Option.toList repeats)
-    
+
     let rec transform (literals: string list) (bindings: IDictionary<string, Values>) = function
         | Ast.List templates ->
             Ast.List <| transformList literals bindings templates
@@ -287,44 +334,16 @@ module Transformers =
             | e -> [transform literals (dict bindings) e]
         List.collect repeat ellipsized'
     
-    let rec patternToData = function
-        | SymbolPattern s -> Symbol s
-        | Pattern.LiteralPattern data -> data
-        | ListPattern pats -> Ast.List <| List.map patternToData pats
-        | ConsPattern (l, r) -> ConsCell (patternToData l, patternToData r)
-    
-    let rec exprToData = function
-        | SymbolExpr s -> Symbol s
-        | LiteralExpr data -> data
-        | ListExpr es -> Ast.List <| List.map exprToData es
-        | ConsExpr (l, r) -> ConsCell (exprToData l, exprToData r)
-        | LetExpr (bindings, body) ->
-            let bindings = List.map (fun (pat, e) -> Ast.List [patternToData pat; exprToData e]) bindings
-            let body = List.map exprToData body
-            Ast.List ((Symbol "let")::(Ast.List bindings)::body)
-        | CaseExpr (e, arms) ->
-            let e = exprToData e
-            let arms = List.map (fun (pat, body) -> Ast.List ((patternToData pat)::(List.map exprToData body))) arms
-            Ast.List [Symbol "case"; e; Ast.List arms]
-        | IfExpr (e1, e2, e3) ->
-            let e1 = exprToData e1
-            let e2 = exprToData e2
-            Ast.List <| (Symbol "if")::e1::e2::(Option.toList <| Option.map exprToData e3)
-        | QuotedExpr q -> Quote <| exprToData q
-        | LambdaExpr (args, body) ->
-            let args = List.map patternToData args
-            let body = List.map exprToData body
-            Ast.List <| (Symbol "lambda")::(Ast.List args)::body
-        | EllipsizedExpr e -> Ellipsis <| exprToData e
-        
-    let createTransformer (literals: string list) (bindings: Binding list) (template: LispData) =
+    let createTransformer (literals: string list) (template: LispData) (boundVars: string list) =
+        let (template, (names_seen, renames)) = renameIdentifiers boundVars [] [] template
+        let depths = getEllipsisDepths template
         let templateExpr = Parsing.expr template
-        let (templateExpr', renamed, renames) = renameInExpr literals (List.map (fun (Binding (k, _)) -> k) bindings) templateExpr
-        let template' = exprToData templateExpr'
-        let depths = getEllipsisDepths template'
-        let bindings = reshapeBindings bindings renames (Seq.toList <| depths.KeyValuePairs())
-        transform literals bindings template'
-        
+        let templateThunk = renameNewBindingsThunk boundVars templateExpr
+        fun (bindings: Binding list) ->
+            let bindings = reshapeBindings bindings renames (Seq.toList <| depths.KeyValuePairs())
+            let template = templateThunk id
+            transform literals bindings template
+
 module Parsing =
     open Types
     
@@ -367,19 +386,23 @@ module Parsing =
     open smindinvern.Parser.Primitives
             
     open smindinvern.Utils
+
+    let rec srPatternVars = function
+        | IdentifierPattern s -> [s]
+        | SyntaxListPattern pats -> List.collect srPatternVars pats
+        | SyntaxConsPattern (l, r) -> List.collect srPatternVars [l; r]
+        | EllipsizedPattern e -> srPatternVars e
+        | _ -> []
         
     let syntaxRule' (literals: string list) (p: LispData list) (template: LispData) =
         let pat = listPattern literals p
+        let boundVars = List.collect srPatternVars pat
         let matcher = PatternMatching.listMatcher' pat
-        fun (input: LispData list) ->
-            let (_, r) = runParser matcher (Parser.Tokenization.Tokenize(input)) ()
-            match r with
-            | Result.Ok(_::bindings) ->
-                try
-                    Result.Ok(Transformers.createTransformer literals bindings (fixupEllipses template))
-                with
-                | e -> Result.Error({Errors.Tree.Value = e.Message; Errors.Tree.Children = []})
-            | Result.Error(e) -> Result.Error(e)
+        let transformer = Transformers.createTransformer literals (fixupEllipses template) boundVars
+        Parser.Monad.parse {
+            let! (_::bindings) = matcher
+            return! catch <| lazy (transformer bindings)
+        }
             
     let syntaxRule (literals: string list) = function
         | Ast.List [Ast.List patterns; template] ->
@@ -394,8 +417,14 @@ module Parsing =
                 | _ -> failwith "Literal list may only include identifiers.") literals
             List.map (syntaxRule literals') rules
         | _ -> failwith "Incorrect form for syntax-rules"
-            
+        
     let defineSyntax = function
         | [Symbol "define-syntax"; Symbol keyword; Ast.List syntax_rules] ->
-            (keyword, syntaxRules syntax_rules)
+            let rules = syntaxRules syntax_rules
+            let runMacro (input: LispData list) =
+                let (_, r) = runParser (Parser.Combinators.oneOf rules) (Parser.Tokenization.Tokenize(input)) ()
+                match r with
+                    | Result.Ok(result) -> result
+                    | Result.Error(e) -> failwithf "%A" e
+            { Keyword = keyword; Transformer = runMacro }
         | _ -> failwith "Incorrect form for define-syntax"

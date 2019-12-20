@@ -12,8 +12,8 @@
     <Compile Include="Parsing.fs" />
     <Compile Include="Scope.fs" />
     <Compile Include="Evaluation.fs" />
-    <Compile Include="Compilation.fs" />
     <Compile Include="Macros.fs" />
+    <Compile Include="Compilation.fs" />
     <Compile Include="Program.fs" />
   </ItemGroup>
 
