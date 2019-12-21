@@ -123,9 +123,21 @@ module PatternMatching =
                     return! error <| "Input does not match pattern constant."
             }
 
+module internal Unique =
+    let mutable i = 1
+
+    let nextI () =
+        let i' = i
+        i <- i + 1
+        i'
+
+    let uniquify (s: string) =
+        sprintf "%s#%d" s <| nextI()
+
 module Transformers =
     open Types
-
+    open Unique
+    
     open System.Collections.Generic
     open Extensions
 
@@ -135,19 +147,12 @@ module Transformers =
         | ListPattern ps -> List.collect patternVars ps
         | ConsPattern (pl, pr) -> List.collect patternVars [pl; pr]
 
-    let mutable i = 1
-
-    let nextI () =
-        let i' = i
-        i <- i + 1
-        i'
-
     let getBoundVars (boundInTemplate: string list) pat =
         patternVars pat
         |> List.filter (not << (Utils.flip List.contains <| boundInTemplate))
 
     let renameNewBindings (boundVars: string list) (rename: string -> string) =
-        let renames = List.map (fun s -> (s, sprintf "#%d" <| nextI())) boundVars
+        let renames = List.map (fun s -> (s, uniquify s)) boundVars
         let renamesDict = dict renames
         fun s ->
             match renamesDict.tryGetValue(s) with
@@ -235,7 +240,7 @@ module Transformers =
             
     let rec renameIdentifier (in_use: string list) (name: string) =
         if List.contains name in_use then
-            renameIdentifier in_use (name + "\'")
+            renameIdentifier in_use (uniquify name)
         else
             name
     
