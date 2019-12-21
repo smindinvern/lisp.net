@@ -282,15 +282,14 @@ module Transformers =
             repeatNTimes (Repeat v) (n - 1)
 
     // Add repeats to ellipsized bindings to replicate inputs as necessary.
-    let reshapeBindings (bindings: Binding list) (renames: (string * string) list) (depths: (string * int) list) =
+    let reshapeBindings (bindings: Binding list) (renames: (string * string) list) (depths: IDictionary<string, int>) =
         let bindingsDict = dict <| List.map (fun (Binding (name, v)) -> (name, v)) bindings
         let copies = List.map (fun (old_name, new_name) -> (new_name, bindingsDict.[old_name])) renames
         let bindings = Seq.append (bindingsDict.KeyValuePairs()) copies
-        let depths = dict depths
         let reshape (name: string, v: Values) =
             (name, repeatNTimes v ((depths.[name]) - (getBindingEllipsisDepth v)))
         dict <| Seq.map reshape bindings 
-                
+
     let splitBindings (xs: (string * Values) list) =
         let (constants, ellipses, repeats) =
             List.unzip3 <|
@@ -340,7 +339,7 @@ module Transformers =
         let templateExpr = Parsing.expr template
         let templateThunk = renameNewBindingsThunk boundVars templateExpr
         fun (bindings: Binding list) ->
-            let bindings = reshapeBindings bindings renames (Seq.toList <| depths.KeyValuePairs())
+            let bindings = reshapeBindings bindings renames depths
             let template = templateThunk id
             transform literals bindings template
 
