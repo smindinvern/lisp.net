@@ -4,6 +4,9 @@ open Ast
 open smindinvern
 open smindinvern.Parser
 
+open System.Collections.Generic
+
+
 // See R6RS sections 11.18 and 11.19.
 // This implementation uses SRFI 149 semantics.
 
@@ -138,7 +141,6 @@ module Transformers =
     open Types
     open Unique
     
-    open System.Collections.Generic
     open Extensions
 
     let rec patternVars = function
@@ -147,9 +149,9 @@ module Transformers =
         | ListPattern ps -> List.collect patternVars ps
         | ConsPattern (pl, pr) -> List.collect patternVars [pl; pr]
 
-    let getBoundVars (boundInTemplate: string list) pat =
+    let getBoundVars (boundInTemplate: HashSet<string>) pat =
         patternVars pat
-        |> List.filter (not << (Utils.flip List.contains <| boundInTemplate))
+        |> List.filter (fun s -> not(boundInTemplate.Contains(s)))
 
     let renameNewBindings (boundVars: string list) (rename: string -> string) =
         let renames = List.map (fun s -> (s, uniquify s)) boundVars
@@ -170,13 +172,13 @@ module Transformers =
             let rthunk = renameInPatternThunk r
             fun rename -> ConsCell (lthunk rename, rthunk rename)
 
-    let rec renameInBindingThunk (boundVars: string list) (pat, e) =
+    let rec renameInBindingThunk (boundVars: HashSet<string>) (pat, e) =
         let patThunk = renameInPatternThunk pat
         let exprThunk = renameNewBindingsThunk boundVars e
         fun rename ->
             (patThunk rename, exprThunk rename)
 
-    and renameInCaseArmThunk (boundVars: string list) (pat, body) : ((string -> string) -> LispData) =
+    and renameInCaseArmThunk (boundVars: HashSet<string>) (pat, body) : ((string -> string) -> LispData) =
         let newBoundVars = getBoundVars boundVars pat
         let bodyThunks = List.map (renameNewBindingsThunk boundVars) body
         let patThunk = renameInPatternThunk pat
@@ -186,7 +188,7 @@ module Transformers =
             let newBody = List.map ((|>) rename) bodyThunks
             Ast.List <| newPat::newBody
             
-    and renameNewBindingsThunk (boundVars: string list) : Expr -> ((string -> string) -> LispData) = function
+    and renameNewBindingsThunk (boundVars: HashSet<string>) : Expr -> ((string -> string) -> LispData) = function
         | SymbolExpr s ->
             fun rename -> Symbol <| rename s
         | LetExpr (bindings, body) ->
@@ -244,10 +246,10 @@ module Transformers =
         else
             name
     
-    let rec renameIdentifiers' (bound: string list) (ld: LispData) (names_seen: string list, renames: (string * string) list) =
+    let rec renameIdentifiers' (bound: HashSet<string>) (ld: LispData) (names_seen: string list, renames: (string * string) list) =
         match ld with
         | Symbol s ->
-            if List.contains s bound then
+            if bound.Contains(s) then
                 let renamed = renameIdentifier names_seen s
                 let x = if renamed <> s then ((s, renamed)::renames) else renames
                 (Symbol renamed, (renamed::names_seen, x))
@@ -255,7 +257,7 @@ module Transformers =
                 (Symbol s, (names_seen, renames))
         | x -> foldLispData (renameIdentifiers' bound) (names_seen, renames) x
     
-    let renameIdentifiers (bound: string list) (names_seen: string list) (renames: (string * string) list) (ld: LispData) =
+    let renameIdentifiers (bound: HashSet<string>) (names_seen: string list) (renames: (string * string) list) (ld: LispData) =
         renameIdentifiers' bound ld (names_seen, renames)
     
     open Extensions
@@ -338,7 +340,7 @@ module Transformers =
             | e -> [transform literals (dict bindings) e]
         List.collect repeat ellipsized'
     
-    let createTransformer (literals: string list) (template: LispData) (boundVars: string list) =
+    let createTransformer (literals: string list) (template: LispData) (boundVars: HashSet<string>) =
         let (template, (names_seen, renames)) = renameIdentifiers boundVars [] [] template
         let depths = getEllipsisDepths template
         let templateExpr = Parsing.expr template
@@ -400,7 +402,7 @@ module Parsing =
         
     let syntaxRule' (literals: string list) (p: LispData list) (template: LispData) =
         let pat = listPattern literals p
-        let boundVars = List.collect srPatternVars pat
+        let boundVars = new HashSet<string>(List.collect srPatternVars pat)
         let matcher = PatternMatching.listMatcher' pat
         let transformer = Transformers.createTransformer literals (fixupEllipses template) boundVars
         Parser.Monad.parse {
