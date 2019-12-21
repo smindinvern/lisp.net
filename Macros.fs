@@ -345,19 +345,6 @@ module Transformers =
 module Parsing =
     open Types
     
-    let rec fixupEllipses (data: LispData) =
-        match data with
-        | Ast.List xs -> Ast.List <| fixupListEllipses xs
-        | ConsCell (l, r) -> ConsCell (fixupEllipses l, fixupEllipses r)
-        | Quote q -> Quote (fixupEllipses q)
-        | x -> x
-    and fixupListEllipses (xs: LispData list) =
-        match xs with
-        | x::(Symbol "...")::xs ->
-            fixupListEllipses ((Ellipsis (fixupEllipses x))::xs)
-        | x::xs -> (fixupEllipses x)::(fixupListEllipses xs)
-        | [] -> []
-    
     let rec pattern (literals : string list) = function
         | Symbol sym ->
             if List.contains sym literals then
@@ -367,17 +354,12 @@ module Parsing =
         | ConsCell (l, r) ->
             SyntaxConsPattern (pattern literals l, pattern literals r)
         | List pats ->
-            SyntaxListPattern <| listPattern literals pats
+            SyntaxListPattern <| List.map (pattern literals) pats
+        | Ellipsis pat ->
+            EllipsizedPattern <| pattern literals pat
         | Quote _ -> failwith "Quoted expressions cannot appear in patterns"
         | LispFunc _ -> failwith "Functions cannot appear in patterns"
         | d -> ConstantPattern d
-    and listPattern (literals : string list) (p: LispData list) =
-        // TODO: Check that each pattern variable only appears once in the pattern.
-        match p with
-        | [] -> []
-        | head::(Symbol "...")::tail ->
-            (EllipsizedPattern <| pattern literals head)::(listPattern literals tail)
-        | head::tail -> (pattern literals head)::(listPattern literals tail)
     
     open smindinvern
     open smindinvern.Alternative
@@ -392,11 +374,11 @@ module Parsing =
         | EllipsizedPattern e -> srPatternVars e
         | _ -> []
         
-    let syntaxRule' (literals: string list) (p: LispData list) (template: LispData) =
-        let pat = listPattern literals p
-        let boundVars = new HashSet<string>(List.collect srPatternVars pat)
-        let matcher = PatternMatching.listMatcher' pat
-        let transformer = Transformers.createTransformer literals (fixupEllipses template) boundVars
+    let syntaxRule' (literals: string list) (ps: LispData list) (template: LispData) =
+        let pats = List.map (pattern literals) ps
+        let boundVars = new HashSet<string>(List.collect srPatternVars pats)
+        let matcher = PatternMatching.listMatcher' pats
+        let transformer = Transformers.createTransformer literals template boundVars
         Parser.Monad.parse {
             let! (_::bindings) = matcher
             return! catch <| lazy (transformer bindings)

@@ -52,7 +52,7 @@ module internal Parsers =
 
     let rec consCell : LispReader<LispData> =
         lazy ((inParens <| parse {
-            let! left = lispData
+            let! left = maybeEllipsized lispData
             do! ignore <@> %Dot
             let! right = lispDataOrConsCell
             return ConsCell (left, right)
@@ -62,13 +62,24 @@ module internal Parsers =
     and quote : LispReader<LispData> =
         lazy ((parse {
             match! pop1 with
-            | SingleQuote -> return! Quote <@> (lispData)
+            | SingleQuote -> return! Quote <@> (maybeEllipsized lispData)
             | t -> return! error <| sprintf "Expected Quote, got %A" t
         }).Force())
     and lispData : LispReader<LispData> =
         lazy ((quote <|> symbol <|> literal <|> lispList).Force())
     and lispDataOrConsCell : LispReader<LispData> =
-        lazy ((lispData <|> consCell).Force())
+        lazy ((maybeEllipsized <| lispData <|> consCell).Force())
+    and maybeEllipsized' (ld: LispData) : LispReader<LispData> =
+        lazy ((parse {
+            match! tryParse %(SymbolToken "...") with
+            | Option.Some(_) -> return! LispData.Ellipsis <@> maybeEllipsized' ld
+            | Option.None -> return ld
+            }).Force())
+    and maybeEllipsized (p: LispReader<LispData>): LispReader<LispData> =
+        lazy ((parse {
+            let! ld = p
+            return! maybeEllipsized' ld
+            }).Force())
         
     let read : LispReader<LispData list> =
         parseUntil isEOF lispDataOrConsCell
