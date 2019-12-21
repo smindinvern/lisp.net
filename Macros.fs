@@ -309,25 +309,25 @@ module Transformers =
          List.collect Option.toList ellipses,
          List.collect Option.toList repeats)
 
-    let rec transform (literals: string list) (bindings: IDictionary<string, Values>) = function
+    let rec transform (bindings: IDictionary<string, Values>) = function
         | Ast.List templates ->
-            Ast.List <| transformList literals bindings templates
+            Ast.List <| transformList bindings templates
         | ConsCell (l, r) ->
-            ConsCell (transform literals bindings l, transform literals bindings r)
+            ConsCell (transform bindings l, transform bindings r)
         | Symbol s ->
             match bindings.tryGetValue(s) with
             | Option.None -> Symbol s
             | Option.Some(Value v) -> v
             | _ -> failwith "Incorrect ellipsis depth."
         | Quote q ->
-            Quote (transform literals bindings q)
+            Quote (transform bindings q)
         | x -> x
-    and transformList (literals: string list) (bindings: IDictionary<string, Values>) = function
+    and transformList (bindings: IDictionary<string, Values>) = function
         | (Ellipsis e)::xs ->
-            (transformEllipsis literals bindings e) @ (transformList literals bindings xs)
-        | x::xs -> (transform literals bindings x)::(transformList literals bindings xs)
+            (transformEllipsis bindings e) @ (transformList bindings xs)
+        | x::xs -> (transform bindings x)::(transformList bindings xs)
         | [] -> []
-    and transformEllipsis (literals: string list) (bindings: IDictionary<string, Values>) (e: LispData) =
+    and transformEllipsis (bindings: IDictionary<string, Values>) (e: LispData) =
         let kvps = List.ofSeq <| bindings.KeyValuePairs()
         let (constants, ellipsized, repeats) = splitBindings kvps
         let (names, ellipsized) = List.unzip ellipsized
@@ -336,8 +336,8 @@ module Transformers =
             let xs = List.zip names ellipsized
             let bindings = xs @ repeats @ constants
             match e with
-            | Ellipsis e' -> transformEllipsis literals (dict bindings) e'
-            | e -> [transform literals (dict bindings) e]
+            | Ellipsis e' -> transformEllipsis (dict bindings) e'
+            | e -> [transform (dict bindings) e]
         List.collect repeat ellipsized'
     
     let createTransformer (literals: string list) (template: LispData) (boundVars: HashSet<string>) =
@@ -348,7 +348,7 @@ module Transformers =
         fun (bindings: Binding list) ->
             let bindings = reshapeBindings bindings renames depths
             let template = templateThunk id
-            transform literals bindings template
+            transform bindings template
 
 module Parsing =
     open Types
