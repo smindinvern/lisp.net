@@ -240,25 +240,18 @@ module Transformers =
             let thunk = renameNewBindingsThunk boundVars e
             fun rename -> Ellipsis <| thunk rename
             
-    let rec renameIdentifier (in_use: string list) (name: string) =
-        if List.contains name in_use then
-            renameIdentifier in_use (uniquify name)
-        else
-            name
-    
-    let rec renameIdentifiers' (bound: HashSet<string>) (ld: LispData) (names_seen: string list, renames: (string * string) list) =
+    let rec renameIdentifiers' (bound: HashSet<string>) (ld: LispData) (renames: (string * string) list) =
         match ld with
         | Symbol s ->
             if bound.Contains(s) then
-                let renamed = renameIdentifier names_seen s
-                let x = if renamed <> s then ((s, renamed)::renames) else renames
-                (Symbol renamed, (renamed::names_seen, x))
+                let renamed = uniquify s
+                (Symbol renamed, (s, renamed)::renames)
             else
-                (Symbol s, (names_seen, renames))
-        | x -> foldLispData (renameIdentifiers' bound) (names_seen, renames) x
+                (Symbol s, renames)
+        | x -> foldLispData (renameIdentifiers' bound) renames x
     
-    let renameIdentifiers (bound: HashSet<string>) (names_seen: string list) (renames: (string * string) list) (ld: LispData) =
-        renameIdentifiers' bound ld (names_seen, renames)
+    let renameIdentifiers (bound: HashSet<string>) (ld: LispData) =
+        renameIdentifiers' bound ld []
     
     open Extensions
     
@@ -291,8 +284,7 @@ module Transformers =
     // Add repeats to ellipsized bindings to replicate inputs as necessary.
     let reshapeBindings (bindings: Binding list) (renames: (string * string) list) (depths: IDictionary<string, int>) =
         let bindingsDict = dict <| List.map (fun (Binding (name, v)) -> (name, v)) bindings
-        let copies = List.map (fun (old_name, new_name) -> (new_name, bindingsDict.[old_name])) renames
-        let bindings = Seq.append (bindingsDict.KeyValuePairs()) copies
+        let bindings = List.map (fun (old_name, new_name) -> (new_name, bindingsDict.[old_name])) renames
         let reshape (name: string, v: Values) =
             (name, repeatNTimes v ((depths.[name]) - (getBindingEllipsisDepth v)))
         dict <| Seq.map reshape bindings 
@@ -341,7 +333,7 @@ module Transformers =
         List.collect repeat ellipsized'
     
     let createTransformer (literals: string list) (template: LispData) (boundVars: HashSet<string>) =
-        let (template, (names_seen, renames)) = renameIdentifiers boundVars [] [] template
+        let (template, renames) = renameIdentifiers boundVars template
         let depths = getEllipsisDepths template
         let templateExpr = Parsing.expr template
         let templateThunk = renameNewBindingsThunk boundVars templateExpr
