@@ -143,103 +143,18 @@ module Transformers =
     
     open Extensions
 
-    let rec patternVars = function
-        | SymbolPattern s -> [s]
-        | Pattern.LiteralPattern _ -> []
-        | ListPattern ps -> List.collect patternVars ps
-        | ConsPattern (pl, pr) -> List.collect patternVars [pl; pr]
+    let tagId (s: string) (i: int) =
+        if s.Contains('#') then
+            s
+        else
+            sprintf "%s#%d" s i
 
-    let getBoundVars (boundInTemplate: HashSet<string>) pat =
-        patternVars pat
-        |> List.filter (fun s -> not(boundInTemplate.Contains(s)))
+    let rec tagIds' (ld: LispData) (i: int) =
+        match ld with
+            | Symbol s -> (Symbol <| tagId s i, i)
+            | x -> foldLispData tagIds' i x
+    let tagIds ld i = fst <| tagIds' ld i
 
-    let renameNewBindings (boundVars: string list) (rename: string -> string) =
-        let renames = List.map (fun s -> (s, uniquify s)) boundVars
-        let renamesDict = dict renames
-        fun s ->
-            match renamesDict.tryGetValue(s) with
-                | Option.Some(v) -> v
-                | Option.None -> rename s
-
-    let rec renameInPatternThunk : Pattern -> ((string -> string) -> LispData) = function
-        | SymbolPattern s -> fun rename -> Symbol <| rename s
-        | Pattern.LiteralPattern d -> fun _ -> d
-        | ListPattern pats ->
-            let thunks = List.map renameInPatternThunk pats
-            fun rename -> Ast.List (List.map ((|>) rename) thunks)
-        | ConsPattern (l, r) ->
-            let lthunk = renameInPatternThunk l
-            let rthunk = renameInPatternThunk r
-            fun rename -> ConsCell (lthunk rename, rthunk rename)
-
-    let rec renameInBindingThunk (boundVars: HashSet<string>) (pat, e) =
-        let patThunk = renameInPatternThunk pat
-        let exprThunk = renameNewBindingsThunk boundVars e
-        fun rename ->
-            (patThunk rename, exprThunk rename)
-
-    and renameInCaseArmThunk (boundVars: HashSet<string>) (pat, body) : ((string -> string) -> LispData) =
-        let newBoundVars = getBoundVars boundVars pat
-        let bodyThunks = List.map (renameNewBindingsThunk boundVars) body
-        let patThunk = renameInPatternThunk pat
-        fun rename ->
-            let rename = renameNewBindings newBoundVars rename
-            let newPat = patThunk rename
-            let newBody = List.map ((|>) rename) bodyThunks
-            Ast.List <| newPat::newBody
-            
-    and renameNewBindingsThunk (boundVars: HashSet<string>) : Expr -> ((string -> string) -> LispData) = function
-        | SymbolExpr s ->
-            fun rename -> Symbol <| rename s
-        | LetExpr (bindings, body) ->
-            // Rename every identifier bound in @bindings that is NOT in @boundVars.
-            // This is to prevent bindings introduced by the macro from shadowing
-            // any other identifiers.
-            let newBoundVars = List.collect (getBoundVars boundVars) (List.map (fun (pat, _) -> pat) bindings)
-            let bodyThunks = List.map (renameNewBindingsThunk boundVars) body
-            let bindingsThunks = List.map (renameInBindingThunk boundVars) bindings
-            fun rename ->
-                let rename = renameNewBindings newBoundVars rename
-                let bindings = List.map ((|>) rename) bindingsThunks
-                let body = List.map ((|>) rename) bodyThunks
-                Ast.List <| (Symbol "let")::(Ast.List <| List.map (fun (x, y) -> Ast.List [x; y]) bindings)::body
-        | CaseExpr (e, arms) ->
-            let exprThunk = renameNewBindingsThunk boundVars e
-            let armThunks = List.map (renameInCaseArmThunk boundVars) arms
-            fun rename -> Ast.List <| (Symbol "case")::(exprThunk rename)::(List.map ((|>) rename) armThunks)
-        | LambdaExpr (pats, body) ->
-            let newBoundVars = List.collect (getBoundVars boundVars) pats
-            let bodyThunks = List.map (renameNewBindingsThunk boundVars) body
-            let patThunks = List.map (renameInPatternThunk) pats
-            fun rename ->
-                let rename = renameNewBindings newBoundVars rename
-                let newPats = List.map ((|>) rename) patThunks
-                let newBody = List.map ((|>) rename) bodyThunks
-                Ast.List <| (Symbol "lambda")::(Ast.List newPats)::newBody
-        | LiteralExpr d -> fun _ -> d
-        | ListExpr es ->
-            let thunks = List.map (renameNewBindingsThunk boundVars) es
-            fun rename -> Ast.List (List.map ((|>) rename) thunks)
-        | ConsExpr (l, r) ->
-            let lthunk = renameNewBindingsThunk boundVars l
-            let rthunk = renameNewBindingsThunk boundVars r
-            fun rename -> ConsCell (lthunk rename, rthunk rename)
-        | IfExpr (e1, e2, e3) ->
-            let e1thunk = renameNewBindingsThunk boundVars e1
-            let e2thunk = renameNewBindingsThunk boundVars e2
-            let e3thunk = Option.map (renameNewBindingsThunk boundVars) e3
-            fun rename ->
-                let e1 = e1thunk rename
-                let e2 = e2thunk rename
-                let e3 = Option.map ((|>) rename) e3thunk
-                Ast.List <| (Symbol "if")::e1::e2::(Option.toList e3)
-        | QuotedExpr q ->
-            let thunk = renameNewBindingsThunk boundVars q
-            fun rename -> Quote <| thunk rename
-        | EllipsizedExpr e ->
-            let thunk = renameNewBindingsThunk boundVars e
-            fun rename -> Ellipsis <| thunk rename
-            
     let rec renameIdentifiers' (bound: HashSet<string>) (ld: LispData) (renames: (string * string) list) =
         match ld with
         | Symbol s ->
@@ -335,12 +250,10 @@ module Transformers =
     let createTransformer (literals: string list) (template: LispData) (boundVars: HashSet<string>) =
         let (template, renames) = renameIdentifiers boundVars template
         let depths = getEllipsisDepths template
-        let templateExpr = Parsing.expr template
-        let templateThunk = renameNewBindingsThunk boundVars templateExpr
         fun (bindings: Binding list) ->
             let bindings = reshapeBindings bindings renames depths
-            let template = templateThunk id
-            transform bindings template
+            let result = transform bindings template
+            tagIds result <| Unique.nextI()
 
 module Parsing =
     open Types
