@@ -104,7 +104,7 @@ let macroTestCase7 =
                   ((let ((d b))
                      a
                      d
-                     (let ((e '(c ...)))
+                     (let ((e (c ...)))
                        e
                      )
                    ) ...
@@ -112,7 +112,7 @@ let macroTestCase7 =
                 )
               )
             )
-            (macro6 ((a b c d) (d c b a)))"
+            (macro7 ((a b c d) (d c b a)))"
     ; correctResult =
         Ast.List [
             Ast.List [
@@ -223,17 +223,10 @@ let testCase3 =
 
 let testCase4 =
     { code =
-          @"(define-syntax quote
-              (syntax-rules ()
-                ((quote x)
-                 'x
-                )
-              )
-            )
-            (define-syntax map
+          @"(define-syntax map
               (syntax-rules ()
                 ((map f (xs ...))
-                 (quote ((f xs) ...))
+                 '((f xs) ...)
                 )
               )
             )
@@ -244,6 +237,28 @@ let testCase4 =
             )"
       ; correctResult = Ast.Quote <| Ast.List (List.map Ast.IntLiteral [2; 3; 4; 5; 6])
     }
+
+let testCase5 =
+    { code =
+          @"(define-syntax macro
+              (syntax-rules ()
+                ((macro x f)
+                 (let ((y x))
+                   (f y)
+                 )
+                )
+              )
+            )
+            (defun test ()
+              (let ((x 12)
+                    (y 2))
+                (let ((f (lambda (x) (+ x y))))
+                  (macro x f)
+                )
+              )
+            )"
+        ; correctResult = Ast.IntLiteral 14
+      }
 
 let lambdaTest2 =
     @"(defun f (x y)
@@ -263,52 +278,65 @@ let lambdaTest2 =
       )"
 
 open Ast
+open Macros.Extensions
+open System.Collections.Generic
 
-let defun ld (macros, defuns) =
+let defun (macros, defuns) ld  =
     match ld with
     | List ((Symbol "defun")::(Symbol name)::(List paramList)::body) ->
-        (macros, (name, List.map Parsing.pattern paramList, List.map Parsing.expr body)::defuns)
+        let boundVars = new HashSet<string>(Seq.ofList <| List.map (fun (x, _, _) -> x) defuns)
+        let thisDefun = (name, List.map (Parsing.pattern macros) paramList, List.map (Parsing.expr boundVars macros) body)
+        (macros, thisDefun::defuns)
     | List ((Symbol "define-syntax")::rest) ->
-        ((Macros.Parsing.defineSyntax <| (Symbol "define-syntax")::rest)::macros, defuns)
-    | x -> failwith <| sprintf "Expected defun expression, got %A" x
+        let m = Macros.Parsing.defineSyntax rest
+        (dict <| (m.Keyword, m)::(List.ofSeq <| macros.KeyValuePairs()), defuns)
+    | x ->
+        let boundVars = new HashSet<string>(Seq.ofList <| List.map (fun (x, _, _) -> x) defuns)
+        let e = Parsing.expr boundVars macros x
+        let scope = Compilation.Builtins.scope
+        let c = Compilation.compileExpr e
+        printfn "%A" (c scope)
+        (macros, defuns)
 
-let topLevel defuns = List.foldBack defun defuns ([], [])
-
+let topLevel defuns =
+    let (macros, defuns) =
+        List.fold defun (dict [], []) defuns
+    (macros, List.rev defuns)
 
 let testMacros =
     for s in [macroTestCase1; macroTestCase2; macroTestCase3; macroTestCase4; macroTestCase5; macroTestCase6; macroTestCase7] do
         printfn "%s" (new System.String('-', 50))
         printfn "%s" s.code
         match Reader.read s.code with
-        | [ Ast.List macroDef; Ast.List macroUse ] ->
+        | [ Ast.List ((Symbol "define-syntax")::macroDef); macroUse ] ->
             let m = Macros.Parsing.defineSyntax macroDef
             try
-                let x = m.Transformer macroUse
+                let e = Parsing.expr (new HashSet<string>()) (dict [(m.Keyword, m)]) macroUse
                 printfn "Expected:\n%s" (s.correctResult.ToString())
-                printfn "Got:\n%s" (x.ToString())
-                printfn "%s" (if s.correctResult = x then "PASS" else "FAIL")
+                printfn "Got:\n%s" (e.ToString())
             with
             | e -> printfn "%A" e
         | _ -> printf "Unexpected input"
 
 let testFunctions =
-    for tc in [testCase1; testCase2; testCase3; testCase4] do
+    for tc in [testCase1; testCase2; testCase3; testCase4; testCase5] do
         printfn "%s" (new System.String('-', 50))
         printfn "%s" tc.code
         let data = Reader.read tc.code
         let (macros, defuns) = topLevel data
-        let macros = dict <| List.map (fun (m: Macros.Types.Macro) -> (m.Keyword, m)) macros
-        printfn "%A" defuns
-        let ctl = Compilation.compileTopLevel macros defuns
+        let ctl = Compilation.compileTopLevel defuns
         match Scope.lookup "test" ctl with
         | Option.Some(test) ->
-            match Evaluation.eval ctl (Ast.List [test]) with
-            | Option.Some(_, result) ->
-                printfn "Expected:\n%s" (tc.correctResult.ToString())
-                printfn "Got:\n%s" (result.ToString())
-                printfn "%s" (if tc.correctResult = result then "PASS" else "FAIL")
-            | Option.None ->
-                printfn "%s" "Evaluation failed!"
+            try
+                match Evaluation.eval ctl (Ast.List [test]) with
+                | Option.Some(_, result) ->
+                    printfn "Expected:\n%s" (tc.correctResult.ToString())
+                    printfn "Got:\n%s" (result.ToString())
+                    printfn "%s" (if tc.correctResult = result then "PASS" else "FAIL")
+                | Option.None ->
+                    printfn "%s" "Evaluation failed!"
+            with
+            | e -> printfn "%A" e
         | Option.None ->
             printfn "%s" "Compilation failed!"
 

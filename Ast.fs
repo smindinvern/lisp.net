@@ -1,6 +1,20 @@
 module Ast
 
     open System
+
+    module Printing =
+        open System.Text
+        
+        let intersperse<'a> (xs: 'a list) (s: string) (append: 'a -> StringBuilder -> StringBuilder) =
+            let inter (sb: StringBuilder) = sb.Append(s)
+            let bound = List.map ((<|) append) xs
+            let sequence = smindinvern.Utils.List.intersperse inter bound
+            List.fold (>>) id sequence
+
+        let bracket (f: StringBuilder -> StringBuilder) (sb: StringBuilder) =
+            (f <| sb.Append('(')).Append(')')
+
+    open Printing
     
     type LispData =
         | List of LispData list
@@ -13,15 +27,12 @@ module Ast
         | LispFunc of Func<LispData list, LispData>
         | Ellipsis of LispData  // This is only valid for macro templates.
         with
-            member private x.ToStringBuilder(sb: Text.StringBuilder) =
+            member internal x.ToStringBuilder(sb: Text.StringBuilder) =
                 match x with
                 | List xs ->
                     let append (y: LispData) (sb: Text.StringBuilder) = y.ToStringBuilder(sb)
-                    let space (sb: Text.StringBuilder) = sb.Append(' ')
-                    let bound = List.map ((<|) append) xs
-                    let sequence = smindinvern.Utils.List.intersperse space bound
-                    let f = List.fold (>>) id sequence
-                    (f (sb.Append('('))).Append(')')
+                    let f = intersperse xs " " append
+                    bracket f sb
                 | ConsCell (l, r) ->
                     r.ToStringBuilder(l.ToStringBuilder(sb.Append('(')).Append(" . ")).Append(')')
                 | IntLiteral i -> sb.Append(i)
@@ -55,7 +66,23 @@ module Ast
             (Ellipsis e, s)
         | x -> (x, s)
 
-    type Expr =
+    type Pattern =
+        | SymbolPattern of string
+        | LiteralPattern of LispData
+        | ListPattern of Pattern list
+        | ConsPattern of Pattern * Pattern
+        with
+            member internal x.ToStringBuilder(sb: Text.StringBuilder) =
+                match x with
+                    | SymbolPattern s -> sb.Append(s)
+                    | LiteralPattern ld -> ld.ToStringBuilder(sb)
+                    | ListPattern pats ->
+                        let append (y: Pattern) (sb: Text.StringBuilder) = y.ToStringBuilder(sb)
+                        let f = intersperse pats " " append
+                        bracket f sb
+                    | ConsPattern (l, r) ->
+                        r.ToStringBuilder(l.ToStringBuilder(sb.Append('(')).Append(" . ")).Append(')')
+    and Expr =
         | SymbolExpr of string
         | LiteralExpr of LispData
         | ListExpr of Expr list
@@ -63,15 +90,35 @@ module Ast
         | LetExpr of (LetBinding list) * (Expr list)
         | CaseExpr of Expr * ((Pattern * (Expr list)) list)
         | IfExpr of Expr * Expr * (Expr option)
-        | QuotedExpr of Expr
+        | QuotedExpr of LispData
         | LambdaExpr of (Pattern list) * (Expr list)
-        | EllipsizedExpr of Expr  // This is only valid for macro templates.
+        with
+            member internal x.ToStringBuilder(sb: Text.StringBuilder) =
+                match x with
+                    | SymbolExpr s -> sb.Append(s)
+                    | LiteralExpr ld -> ld.ToStringBuilder(sb)
+                    | ListExpr es -> 
+                        let append (y: Expr) (sb: Text.StringBuilder) = y.ToStringBuilder(sb)
+                        let f = intersperse es " " append
+                        bracket f sb
+                    | ConsExpr (l, r) ->
+                        r.ToStringBuilder(l.ToStringBuilder(sb.Append('(')).Append(" . ")).Append(')')
+                    | LetExpr (bindings, body) ->
+                        let append (pat: Pattern, e: Expr) (sb: Text.StringBuilder) =
+                            let f (sb: Text.StringBuilder) =
+                                e.ToStringBuilder(pat.ToStringBuilder(sb).Append(' '))
+                            bracket f sb
+                        let bindings = bracket <| intersperse bindings "\n" append
+                        let append (e: Expr) (sb: Text.StringBuilder) = e.ToStringBuilder(sb)
+                        let body = intersperse body "\n" append
+                        let inner (sb: Text.StringBuilder) = body ((bindings sb).Append('\n'))
+                        (inner (sb.Append("(let "))).Append(')')
+                    | CaseExpr (e, arms) -> sb
+                    | IfExpr _ -> sb
+                    | QuotedExpr ld -> ld.ToStringBuilder(sb)
+                    | LambdaExpr _ -> sb
+            override x.ToString() = x.ToStringBuilder(Text.StringBuilder()).ToString()
     and LetBinding = Pattern * Expr
-    and Pattern =
-        | SymbolPattern of string
-        | LiteralPattern of LispData
-        | ListPattern of Pattern list
-        | ConsPattern of Pattern * Pattern
         
     let rec foldPattern (f: Pattern -> 'state -> (Pattern * 'state)) (s: 'state) (pat: Pattern) =
         match pat with
@@ -113,15 +160,9 @@ module Ast
             | Option.Some(e3) ->
                 let (e3, s) = f e3 s
                 (IfExpr (e1, e2, Option.Some(e3)), s)
-        | QuotedExpr q ->
-            let (q, s) = f q s
-            (QuotedExpr q, s)
         | LambdaExpr (pats, body) ->
             let (body, s) = foldExprList f body s
             (LambdaExpr (pats, body), s)
-        | EllipsizedExpr e ->
-            let (e, s) = f e s
-            (EllipsizedExpr e, s)
         | x -> (x, s)
     and private foldExprList' f g es s =
         let folder e (es, state) =
@@ -137,29 +178,28 @@ module Ast
         | ListPattern pats -> List <| List.map patternToData pats
         | ConsPattern (l, r) -> ConsCell (patternToData l, patternToData r)
 
-    let rec exprToData = function
-        | SymbolExpr s -> Symbol s
-        | LiteralExpr data -> data
-        | ListExpr es -> List <| List.map exprToData es
-        | ConsExpr (l, r) -> ConsCell (exprToData l, exprToData r)
-        | LetExpr (bindings, body) ->
-            let bindings = List.map (fun (pat, e) -> List [patternToData pat; exprToData e]) bindings
-            let body = List.map exprToData body
-            List ((Symbol "let")::(List bindings)::body)
-        | CaseExpr (e, arms) ->
-            let e = exprToData e
-            let arms = List.map (fun (pat, body) -> List ((patternToData pat)::(List.map exprToData body))) arms
-            List [Symbol "case"; e; List arms]
-        | IfExpr (e1, e2, e3) ->
-            let e1 = exprToData e1
-            let e2 = exprToData e2
-            List <| (Symbol "if")::e1::e2::(Option.toList <| Option.map exprToData e3)
-        | QuotedExpr q -> Quote <| exprToData q
-        | LambdaExpr (args, body) ->
-            let args = List.map patternToData args
-            let body = List.map exprToData body
-            List <| (Symbol "lambda")::(List args)::body
-        | EllipsizedExpr e -> Ellipsis <| exprToData e
+    // let rec exprToData = function
+    //     | SymbolExpr s -> Symbol s
+    //     | LiteralExpr data -> data
+    //     | ListExpr es -> List <| List.map exprToData es
+    //     | ConsExpr (l, r) -> ConsCell (exprToData l, exprToData r)
+    //     | LetExpr (bindings, body) ->
+    //         let bindings = List.map (fun (pat, e) -> List [patternToData pat; exprToData e]) bindings
+    //         let body = List.map exprToData body
+    //         List ((Symbol "let")::(List bindings)::body)
+    //     | CaseExpr (e, arms) ->
+    //         let e = exprToData e
+    //         let arms = List.map (fun (pat, body) -> List ((patternToData pat)::(List.map exprToData body))) arms
+    //         List [Symbol "case"; e; List arms]
+    //     | IfExpr (e1, e2, e3) ->
+    //         let e1 = exprToData e1
+    //         let e2 = exprToData e2
+    //         List <| (Symbol "if")::e1::e2::(Option.toList <| Option.map exprToData e3)
+    //     | QuotedExpr q -> Quote <| exprToData q
+    //     | LambdaExpr (args, body) ->
+    //         let args = List.map patternToData args
+    //         let body = List.map exprToData body
+    //         List <| (Symbol "lambda")::(List args)::body
         
     type ParamList = Pattern list
     

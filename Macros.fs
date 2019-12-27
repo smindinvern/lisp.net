@@ -6,7 +6,6 @@ open smindinvern.Parser
 
 open System.Collections.Generic
 
-
 // See R6RS sections 11.18 and 11.19.
 // This implementation uses SRFI 149 semantics.
 
@@ -53,12 +52,19 @@ module Extensions =
                 Some(!v)
             else
                 None
-        [<Extension>]
-        static member tryPeelOff<'a>(xs: 'a list, pred: 'a -> bool) =
-            let (matching, nonmatching) = List.partition pred xs
-            match matching with
-            | head::tail -> Option.Some(head, tail @ nonmatching)
-            | _ -> Option.None
+
+let tagId (s: string) (i: int) =
+    if s.Contains('#') || List.contains s ["let"; "case"; "lambda"; "if"] then
+        s
+    else
+        sprintf "%s#%d" s i
+
+let rec tagIds' (ld: LispData) (i: int) =
+    match ld with
+        | Symbol s -> (Symbol <| tagId s i, i)
+        | x -> foldLispData tagIds' i x
+let tagIds ld i = fst <| tagIds' ld i
+
 
 module PatternMatching =
     open Types
@@ -102,7 +108,9 @@ module PatternMatching =
             // datum is in this position of the input to the identifier.
             parse {
                 let! datum = pop1
-                return [Binding (id, Value datum)]
+                // Tag all identifiers in @datum to be distinct from identifiers
+                // introduced by macro transformers.
+                return [Binding (id, Value <| tagIds datum 0)]
             }
         | LiteralPattern lit ->
             // The pattern is an identifier that appears in the list of literals
@@ -143,117 +151,107 @@ module Transformers =
     
     open Extensions
 
-    let tagId (s: string) (i: int) =
-        if s.Contains('#') then
-            s
-        else
-            sprintf "%s#%d" s i
+    module SyntaxRules =
 
-    let rec tagIds' (ld: LispData) (i: int) =
-        match ld with
-            | Symbol s -> (Symbol <| tagId s i, i)
-            | x -> foldLispData tagIds' i x
-    let tagIds ld i = fst <| tagIds' ld i
+        let rec renameIdentifiers' (bound: HashSet<string>) (ld: LispData) (renames: (string * string) list) =
+            match ld with
+            | Symbol s ->
+                if bound.Contains(s) then
+                    let renamed = uniquify s
+                    (Symbol renamed, (s, renamed)::renames)
+                else
+                    (Symbol s, renames)
+            | x -> foldLispData (renameIdentifiers' bound) renames x
 
-    let rec renameIdentifiers' (bound: HashSet<string>) (ld: LispData) (renames: (string * string) list) =
-        match ld with
-        | Symbol s ->
-            if bound.Contains(s) then
-                let renamed = uniquify s
-                (Symbol renamed, (s, renamed)::renames)
+        let renameIdentifiers (bound: HashSet<string>) (ld: LispData) =
+            renameIdentifiers' bound ld []
+
+        open Extensions
+
+        let rec getEllipsisDepths' = function
+            | Ast.List xs ->
+                List.collect getEllipsisDepths' xs
+            | ConsCell (l, r) ->
+                getEllipsisDepths' (Ast.List [l; r])
+            | Symbol s ->
+                [(s, 0)]
+            | Quote q ->
+                getEllipsisDepths' q
+            | Ellipsis e ->
+                let results = getEllipsisDepths' e
+                List.map (fun (k, v) -> (k, v + 1)) results
+            | _ -> []
+
+        let getEllipsisDepths x = dict <| getEllipsisDepths' x
+
+        let rec getBindingEllipsisDepth = function
+            | EllipsizedValue (v::_) -> (getBindingEllipsisDepth v) + 1
+            | Value _ -> 0
+
+        let rec repeatNTimes (v: Values) (n: int) =
+            if n = 0 then
+                v
             else
-                (Symbol s, renames)
-        | x -> foldLispData (renameIdentifiers' bound) renames x
-    
-    let renameIdentifiers (bound: HashSet<string>) (ld: LispData) =
-        renameIdentifiers' bound ld []
-    
-    open Extensions
-    
-    let rec getEllipsisDepths' = function
-        | Ast.List xs ->
-            List.collect getEllipsisDepths' xs
-        | ConsCell (l, r) ->
-            getEllipsisDepths' (Ast.List [l; r])
-        | Symbol s ->
-            [(s, 0)]
-        | Quote q ->
-            getEllipsisDepths' q
-        | Ellipsis e ->
-            let results = getEllipsisDepths' e
-            List.map (fun (k, v) -> (k, v + 1)) results
-        | _ -> []
-    
-    let getEllipsisDepths x = dict <| getEllipsisDepths' x
-    
-    let rec getBindingEllipsisDepth = function
-        | EllipsizedValue (v::_) -> (getBindingEllipsisDepth v) + 1
-        | Value _ -> 0
-    
-    let rec repeatNTimes (v: Values) (n: int) =
-        if n = 0 then
-            v
-        else
-            repeatNTimes (Repeat v) (n - 1)
+                repeatNTimes (Repeat v) (n - 1)
 
-    // Add repeats to ellipsized bindings to replicate inputs as necessary.
-    let reshapeBindings (bindings: Binding list) (renames: (string * string) list) (depths: IDictionary<string, int>) =
-        let bindingsDict = dict <| List.map (fun (Binding (name, v)) -> (name, v)) bindings
-        let bindings = List.map (fun (old_name, new_name) -> (new_name, bindingsDict.[old_name])) renames
-        let reshape (name: string, v: Values) =
-            (name, repeatNTimes v ((depths.[name]) - (getBindingEllipsisDepth v)))
-        dict <| Seq.map reshape bindings 
+        // Add repeats to ellipsized bindings to replicate inputs as necessary.
+        let reshapeBindings (bindings: Binding list) (renames: (string * string) list) (depths: IDictionary<string, int>) =
+            let bindingsDict = dict <| List.map (fun (Binding (name, v)) -> (name, v)) bindings
+            let bindings = List.map (fun (old_name, new_name) -> (new_name, bindingsDict.[old_name])) renames
+            let reshape (name: string, v: Values) =
+                (name, repeatNTimes v ((depths.[name]) - (getBindingEllipsisDepth v)))
+            dict <| Seq.map reshape bindings 
 
-    let splitBindings (xs: (string * Values) list) =
-        let (constants, ellipses, repeats) =
-            List.unzip3 <|
-            List.map (fun (name, v) ->
-                match v with
-                | EllipsizedValue vs -> (Option.None, Option.Some(name, vs), Option.None)
-                | Repeat v -> (Option.None, Option.None, Option.Some(name, v))
-                | Value _ -> (Option.Some(name, v), Option.None, Option.None)) xs
-        (List.collect Option.toList constants,
-         List.collect Option.toList ellipses,
-         List.collect Option.toList repeats)
+        let splitBindings (xs: (string * Values) list) =
+            let (constants, ellipses, repeats) =
+                List.unzip3 <|
+                List.map (fun (name, v) ->
+                    match v with
+                    | EllipsizedValue vs -> (Option.None, Option.Some(name, vs), Option.None)
+                    | Repeat v -> (Option.None, Option.None, Option.Some(name, v))
+                    | Value _ -> (Option.Some(name, v), Option.None, Option.None)) xs
+            (List.collect Option.toList constants,
+             List.collect Option.toList ellipses,
+             List.collect Option.toList repeats)
 
-    let rec transform (bindings: IDictionary<string, Values>) = function
-        | Ast.List templates ->
-            Ast.List <| transformList bindings templates
-        | ConsCell (l, r) ->
-            ConsCell (transform bindings l, transform bindings r)
-        | Symbol s ->
-            match bindings.tryGetValue(s) with
-            | Option.None -> Symbol s
-            | Option.Some(Value v) -> v
-            | _ -> failwith "Incorrect ellipsis depth."
-        | Quote q ->
-            Quote (transform bindings q)
-        | x -> x
-    and transformList (bindings: IDictionary<string, Values>) = function
-        | (Ellipsis e)::xs ->
-            (transformEllipsis bindings e) @ (transformList bindings xs)
-        | x::xs -> (transform bindings x)::(transformList bindings xs)
-        | [] -> []
-    and transformEllipsis (bindings: IDictionary<string, Values>) (e: LispData) =
-        let kvps = List.ofSeq <| bindings.KeyValuePairs()
-        let (constants, ellipsized, repeats) = splitBindings kvps
-        let (names, ellipsized) = List.unzip ellipsized
-        let ellipsized' = List.transpose ellipsized
-        let repeat (ellipsized: Values list) =
-            let xs = List.zip names ellipsized
-            let bindings = xs @ repeats @ constants
-            match e with
-            | Ellipsis e' -> transformEllipsis (dict bindings) e'
-            | e -> [transform (dict bindings) e]
-        List.collect repeat ellipsized'
-    
-    let createTransformer (literals: string list) (template: LispData) (boundVars: HashSet<string>) =
-        let (template, renames) = renameIdentifiers boundVars template
-        let depths = getEllipsisDepths template
-        fun (bindings: Binding list) ->
-            let bindings = reshapeBindings bindings renames depths
-            let result = transform bindings template
-            tagIds result <| Unique.nextI()
+        let rec transform (bindings: IDictionary<string, Values>) = function
+            | Ast.List templates ->
+                Ast.List <| transformList bindings templates
+            | ConsCell (l, r) ->
+                ConsCell (transform bindings l, transform bindings r)
+            | Symbol s ->
+                match bindings.tryGetValue(s) with
+                | Option.None -> Symbol s
+                | Option.Some(Value v) -> v
+                | _ -> failwith "Incorrect ellipsis depth."
+            | Quote q ->
+                Quote (transform bindings q)
+            | x -> x
+        and transformList (bindings: IDictionary<string, Values>) = function
+            | (Ellipsis e)::xs ->
+                (transformEllipsis bindings e) @ (transformList bindings xs)
+            | x::xs -> (transform bindings x)::(transformList bindings xs)
+            | [] -> []
+        and transformEllipsis (bindings: IDictionary<string, Values>) (e: LispData) =
+            let kvps = List.ofSeq <| bindings.KeyValuePairs()
+            let (constants, ellipsized, repeats) = splitBindings kvps
+            let (names, ellipsized) = List.unzip ellipsized
+            let ellipsized' = List.transpose ellipsized
+            let repeat (ellipsized: Values list) =
+                let xs = List.zip names ellipsized
+                let bindings = xs @ repeats @ constants
+                match e with
+                | Ellipsis e' -> transformEllipsis (dict bindings) e'
+                | e -> [transform (dict bindings) e]
+            List.collect repeat ellipsized'
+
+        let createTransformer (literals: string list) (template: LispData) (boundVars: HashSet<string>) =
+            let (template, renames) = renameIdentifiers boundVars template
+            let depths = getEllipsisDepths template
+            fun (bindings: Binding list) ->
+                let bindings = reshapeBindings bindings renames depths
+                let result = transform bindings template
+                tagIds result <| Unique.nextI()
 
 module Parsing =
     open Types
@@ -291,7 +289,7 @@ module Parsing =
         let pats = List.map (pattern literals) ps
         let boundVars = new HashSet<string>(List.collect srPatternVars pats)
         let matcher = PatternMatching.listMatcher' pats
-        let transformer = Transformers.createTransformer literals template boundVars
+        let transformer = Transformers.SyntaxRules.createTransformer literals template boundVars
         Parser.Monad.parse {
             let! (_::bindings) = matcher
             return! catch <| lazy (transformer bindings)
@@ -301,7 +299,7 @@ module Parsing =
         | Ast.List [Ast.List patterns; template] ->
             syntaxRule' literals patterns template
         | _ -> failwith "Invalid form for syntax-rule."
-    
+
     let syntaxRules = function
         | (Symbol "syntax-rules")::(List literals)::rules ->
             // TODO: check form of @literals
@@ -312,7 +310,7 @@ module Parsing =
         | _ -> failwith "Incorrect form for syntax-rules"
         
     let defineSyntax = function
-        | [Symbol "define-syntax"; Symbol keyword; Ast.List syntax_rules] ->
+        | [Symbol keyword; Ast.List syntax_rules] ->
             let rules = syntaxRules syntax_rules
             let runMacro (input: LispData list) =
                 let (_, r) = runParser (Parser.Combinators.oneOf rules) (Parser.Tokenization.Tokenize(input)) ()
