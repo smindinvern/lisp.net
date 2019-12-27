@@ -223,19 +223,12 @@ let testCase3 =
 
 let testCase4 =
     { code =
-          @"(define-syntax map
-              (syntax-rules ()
-                ((map f (xs ...))
-                 '((f xs) ...)
-                )
-              )
-            )
-            (defun test ()
+          @"(defun test ()
               (let ((f (lambda (x) (+ x 1))))
-                (map f (1 2 3 4 5))
+                (map f '(1 2 3 4 5))
               )
             )"
-      ; correctResult = Ast.Quote <| Ast.List (List.map Ast.IntLiteral [2; 3; 4; 5; 6])
+      ; correctResult = Ast.List (List.map Ast.IntLiteral [2; 3; 4; 5; 6])
     }
 
 let testCase5 =

@@ -170,8 +170,15 @@ module Compilation
                     printfn "%A" x
                     snd S_nil
         let F_println = ("println", LispFunc (new Func<LispData list, LispData>(println)))
-    
-        let scope : Scope = [new System.Collections.Generic.Dictionary<string, LispData>(dict [S_t; S_nil; F_eq; F_plus; F_minus; F_println])]
+
+        let private map = function
+            | [LispFunc f; Ast.List xs] ->
+                let apply x = f.Invoke([x])
+                Ast.List <| List.map apply xs
+            | args -> failwithf "map syntax: (map f xs).  called with %s" <| (Ast.List <| (Symbol "map")::args).ToString()
+        let F_map = ("map", LispFunc (new Func<LispData list, LispData>(map)))
+        
+        let scope : Scope = [new System.Collections.Generic.Dictionary<string, LispData>(dict [S_t; S_nil; F_eq; F_plus; F_minus; F_println; F_map])]
     
     let compileTopLevel (t: TopLevel) : Scope =
         let compiled = List.map compileDefun t
