@@ -236,8 +236,8 @@ let testCase5 =
           @"(define-syntax macro
               (syntax-rules ()
                 ((macro x f)
-                 (let ((y x))
-                   (f y)
+                 (let ((y 4))
+                   (f (+ y x))
                  )
                 )
               )
@@ -245,12 +245,12 @@ let testCase5 =
             (defun test ()
               (let ((x 12)
                     (y 2))
-                (let ((f (lambda (x) (+ x y))))
-                  (macro x f)
+                (let ((f (lambda (y) (+ x y))))
+                  (macro y f)
                 )
               )
             )"
-        ; correctResult = Ast.IntLiteral 14
+        ; correctResult = Ast.IntLiteral 18
       }
 
 let lambdaTest2 =
@@ -274,27 +274,48 @@ open Ast
 open Macros.Extensions
 open System.Collections.Generic
 
-let defun (macros, defuns) ld  =
+open smindinvern.State.Lazy
+open smindinvern.Utils
+
+let foldM (f: 'acc -> 'a -> State<'s, 'acc>) (s: State<'s, 'acc>) (xs: 'a list) : State<'s, 'acc> =
+    let g = flip f
+    List.fold (fun (s: State<'s, 'acc>) (x: 'a) -> (s >>= (g x))) s xs
+
+let defun defuns ld  =
     match ld with
     | List ((Symbol "defun")::(Symbol name)::(List paramList)::body) ->
-        let boundVars = new HashSet<string>(Seq.ofList <| List.map (fun (x, _, _) -> x) defuns)
-        let thisDefun = (name, List.map (Parsing.pattern macros) paramList, List.map (Parsing.expr boundVars macros) body)
-        (macros, thisDefun::defuns)
+        state {
+            let! paramList = sequence <| List.map Parsing.pattern paramList
+            let! s = get
+            do! Parsing.addBoundVars <| List.collect Parsing.patternVars paramList
+            let! body = sequence <| List.map Parsing.expr body
+            do! put s
+            let thisDefun = (name, paramList, body)
+            do! Parsing.addBoundVars [name]
+            return (thisDefun::defuns)
+        }
     | List ((Symbol "define-syntax")::rest) ->
         let m = Macros.Parsing.defineSyntax rest
-        (dict <| (m.Keyword, m)::(List.ofSeq <| macros.KeyValuePairs()), defuns)
+        state {
+            let! (s: Parsing.ParserState) = get
+            let d = dict <| (m.Keyword, m)::(List.ofSeq <| s.Macros.KeyValuePairs())
+            do! put { s with Macros = d }
+            return defuns
+        }
     | x ->
-        let boundVars = new HashSet<string>(Seq.ofList <| List.map (fun (x, _, _) -> x) defuns)
-        let e = Parsing.expr boundVars macros x
-        let scope = Compilation.Builtins.scope
-        let c = Compilation.compileExpr e
-        printfn "%A" (c scope)
-        (macros, defuns)
+        state {
+            let! e = Parsing.expr x
+            let scope = Compilation.Builtins.scope
+            let c = Compilation.compileExpr e
+            do! inject <| printfn "%A" (c scope)
+            return defuns
+        }
 
 let topLevel defuns =
-    let (macros, defuns) =
-        List.fold defun (dict [], []) defuns
-    (macros, List.rev defuns)
+    let parsed =
+        foldM defun (inject <| []) defuns
+    let (s, defuns) = runState parsed { Parsing.BoundVars = new HashSet<string>(); Parsing.Macros = dict [] }
+    (s.Macros, List.rev defuns)
 
 let testMacros =
     for s in [macroTestCase1; macroTestCase2; macroTestCase3; macroTestCase4; macroTestCase5; macroTestCase6; macroTestCase7] do
@@ -304,7 +325,8 @@ let testMacros =
         | [ Ast.List ((Symbol "define-syntax")::macroDef); macroUse ] ->
             let m = Macros.Parsing.defineSyntax macroDef
             try
-                let e = Parsing.expr (new HashSet<string>()) (dict [(m.Keyword, m)]) macroUse
+                let p = Parsing.expr macroUse
+                let (_, e) = runState p { Parsing.BoundVars = new HashSet<string>(); Parsing.Macros = dict [(m.Keyword, m)] }
                 printfn "Expected:\n%s" (s.correctResult.ToString())
                 printfn "Got:\n%s" (e.ToString())
             with
