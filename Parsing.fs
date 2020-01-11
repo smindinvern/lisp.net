@@ -192,3 +192,44 @@ module Parsing
             }
         | Ellipsis e -> failwith "Ellipses only allowed in macro definitions"
         | x -> inject <| LiteralExpr x
+
+    let private foldM (f: 'acc -> 'a -> State<'s, 'acc>) (s: State<'s, 'acc>) (xs: 'a list) : State<'s, 'acc> =
+        let g = flip f
+        List.fold (fun (s: State<'s, 'acc>) (x: 'a) -> (s >>= (g x))) s xs
+
+    let defun defuns ld  =
+        match ld with
+        | List ((Symbol "defun")::(Symbol name)::(List paramList)::body) ->
+            state {
+                let! paramList = sequence <| List.map pattern paramList
+                let! s = get
+                do! addBoundVars <| List.collect patternVars paramList
+                let! body = sequence <| List.map expr body
+                do! put s
+                let thisDefun = (name, paramList, body)
+                do! addBoundVars [name]
+                return (thisDefun::defuns)
+            }
+        | List ((Symbol "define-syntax")::rest) ->
+            let m = Macros.Parsing.defineSyntax rest
+            state {
+                let! s = get
+                let d = dict <| (m.Keyword, m)::(List.ofSeq <| s.Macros.KeyValuePairs())
+                do! put { s with Macros = d }
+                return defuns
+            }
+        | x ->
+            failwithf "Not a defun or macro definition: %A" x
+            // state {
+            //     let! e = expr x
+            //     let scope = Compilation.Builtins.scope
+            //     let c = Compilation.compileExpr e
+            //     do! inject <| printfn "%A" (c scope)
+            //     return defuns
+            // }
+
+    let topLevel defuns =
+        let parsed =
+            foldM defun (inject <| []) defuns
+        let (s, defuns) = runState parsed { BoundVars = new HashSet<string>(); Macros = dict [] }
+        (s.Macros, List.rev defuns)

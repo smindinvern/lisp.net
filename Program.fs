@@ -277,47 +277,7 @@ open System.Collections.Generic
 open smindinvern.State.Lazy
 open smindinvern.Utils
 
-let foldM (f: 'acc -> 'a -> State<'s, 'acc>) (s: State<'s, 'acc>) (xs: 'a list) : State<'s, 'acc> =
-    let g = flip f
-    List.fold (fun (s: State<'s, 'acc>) (x: 'a) -> (s >>= (g x))) s xs
-
-let defun defuns ld  =
-    match ld with
-    | List ((Symbol "defun")::(Symbol name)::(List paramList)::body) ->
-        state {
-            let! paramList = sequence <| List.map Parsing.pattern paramList
-            let! s = get
-            do! Parsing.addBoundVars <| List.collect Parsing.patternVars paramList
-            let! body = sequence <| List.map Parsing.expr body
-            do! put s
-            let thisDefun = (name, paramList, body)
-            do! Parsing.addBoundVars [name]
-            return (thisDefun::defuns)
-        }
-    | List ((Symbol "define-syntax")::rest) ->
-        let m = Macros.Parsing.defineSyntax rest
-        state {
-            let! (s: Parsing.ParserState) = get
-            let d = dict <| (m.Keyword, m)::(List.ofSeq <| s.Macros.KeyValuePairs())
-            do! put { s with Macros = d }
-            return defuns
-        }
-    | x ->
-        state {
-            let! e = Parsing.expr x
-            let scope = Compilation.Builtins.scope
-            let c = Compilation.compileExpr e
-            do! inject <| printfn "%A" (c scope)
-            return defuns
-        }
-
-let topLevel defuns =
-    let parsed =
-        foldM defun (inject <| []) defuns
-    let (s, defuns) = runState parsed { Parsing.BoundVars = new HashSet<string>(); Parsing.Macros = dict [] }
-    (s.Macros, List.rev defuns)
-
-let testMacros =
+let testMacros () =
     for s in [macroTestCase1; macroTestCase2; macroTestCase3; macroTestCase4; macroTestCase5; macroTestCase6; macroTestCase7] do
         printfn "%s" (new System.String('-', 50))
         printfn "%s" s.code
@@ -333,12 +293,12 @@ let testMacros =
             | e -> printfn "%A" e
         | _ -> printf "Unexpected input"
 
-let testFunctions =
+let testFunctions () =
     for tc in [testCase1; testCase2; testCase3; testCase4; testCase5] do
         printfn "%s" (new System.String('-', 50))
         printfn "%s" tc.code
         let data = Reader.read tc.code
-        let (macros, defuns) = topLevel data
+        let (macros, defuns) = Parsing.topLevel data
         let ctl = Compilation.compileTopLevel defuns
         match Scope.lookup "test" ctl with
         | Option.Some(test) ->
@@ -355,8 +315,11 @@ let testFunctions =
         | Option.None ->
             printfn "%s" "Compilation failed!"
 
+let runTests () =
+    testMacros()
+    testFunctions()
+    0
+
 [<EntryPoint>]
 let main argv =
-    testMacros
-    testFunctions
-    0
+    runTests()
