@@ -49,18 +49,18 @@ module Primitives =
 
     let private println =
         function
-            | [StringLiteral s] ->
-                printfn "%s" s
+            | [x] ->
+                match x with
+                | StringLiteral s ->
+                    printfn "%s" s
+                | IntLiteral i ->
+                    printfn "%d" i
+                | FloatLiteral f ->
+                    printfn "%f" f
+                | _ -> printfn "%s" <| x.ToString()
                 snd S_nil
-            | [IntLiteral i] ->
-                printfn "%d" i
-                snd S_nil
-            | [FloatLiteral f] ->
-                printfn "%f" f
-                snd S_nil
-            | x ->
-                printfn "%A" x
-                snd S_nil
+            | _ ->
+                failwith "println takes exactly one argument"
     let F_println = ("println", LispFunc (new Func<LispData list, LispData>(println)))
     addBuiltin F_println
 
