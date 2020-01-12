@@ -12,6 +12,7 @@
     <Compile Include="Macros.fs" />
     <Compile Include="Parsing.fs" />
     <Compile Include="Scope.fs" />
+    <Compile Include="Environment.fs" />
     <Compile Include="Evaluation.fs" />
     <Compile Include="Compilation.fs" />
     <Compile Include="Program.fs" />

@@ -125,61 +125,11 @@ module Compilation
         fun scope ->
             let (scope', cfunc) = clambda scope
             (Scope.add (s, cfunc) scope', cfunc)
-    
-    module Builtins =
-        let S_t = ("t", Symbol "t")
-        let S_nil = ("nil", Symbol "nil")
-        let private eq2 (obj1: LispData) (obj2: LispData) =
-            snd <| if obj1 = obj2 then S_t else S_nil
-        let private eq (objs: LispData list) =
-            match objs with
-                | [obj1; obj2] -> eq2 obj1 obj2
-                | _ -> failwith "= takes exactly two arguments"
-        let F_eq = ("=", LispFunc (new Func<LispData list, LispData>(eq)))
-        let private plus =
-            function
-                | [IntLiteral a; IntLiteral b] -> IntLiteral (a+b)
-                | [FloatLiteral a; FloatLiteral b] -> FloatLiteral (a+b)
-                | [IntLiteral a; FloatLiteral b] -> FloatLiteral ((float a) + b)
-                | [FloatLiteral a; IntLiteral b] -> FloatLiteral (a + (float b))
-                | [a; b] -> failwith <| sprintf "%A and %A are not both numeric values" a b
-                | _ -> failwith "+ takes exactly two arguments"
-        let F_plus = ("+", LispFunc (new Func<LispData list, LispData>(plus)))
-        let private minus =
-            function
-                | [IntLiteral a; IntLiteral b] -> IntLiteral (a-b)
-                | [FloatLiteral a; FloatLiteral b] -> FloatLiteral (a-b)
-                | [IntLiteral a; FloatLiteral b] -> FloatLiteral ((float a) - b)
-                | [FloatLiteral a; IntLiteral b] -> FloatLiteral (a - (float b))
-                | [a; b] -> failwith <| sprintf "%A and %A are not both numeric values" a b
-                | _ -> failwith "- takes exactly two arguments"
-        let F_minus = ("-", LispFunc (new Func<LispData list, LispData>(minus)))
-    
-        let private println =
-            function
-                | [StringLiteral s] ->
-                    printfn "%s" s
-                    snd S_nil
-                | [IntLiteral i] ->
-                    printfn "%d" i
-                    snd S_nil
-                | [FloatLiteral f] ->
-                    printfn "%f" f
-                    snd S_nil
-                | x ->
-                    printfn "%A" x
-                    snd S_nil
-        let F_println = ("println", LispFunc (new Func<LispData list, LispData>(println)))
 
-        let private map = function
-            | [LispFunc f; Ast.List xs] ->
-                let apply x = f.Invoke([x])
-                Ast.List <| List.map apply xs
-            | args -> failwithf "map syntax: (map f xs).  called with %s" <| (Ast.List <| (Symbol "map")::args).ToString()
-        let F_map = ("map", LispFunc (new Func<LispData list, LispData>(map)))
+    open Environment
         
-        let scope : Scope = [new System.Collections.Generic.Dictionary<string, LispData>(dict [S_t; S_nil; F_eq; F_plus; F_minus; F_println; F_map])]
+    let scope : Scope = [new System.Collections.Generic.Dictionary<string, LispData>(dict Builtins)]
     
     let compileTopLevel (t: TopLevel) : Scope =
         let compiled = List.map compileDefun t
-        List.fold (fun s c -> fst <| c s) Builtins.scope compiled
+        List.fold (fun s c -> fst <| c s) scope compiled
