@@ -64,6 +64,24 @@ module Primitives =
     let F_println = ("println", LispFunc (new Func<LispData list, LispData>(println)))
     addBuiltin F_println
 
+    let private car =
+        function
+            | [List xs] ->
+                List.head xs
+            | _ ->
+                failwith "car takes exactly one argument"
+    let F_car = ("car", LispFunc (new Func<LispData list, LispData>(car)))
+    addBuiltin F_car
+    
+    let private cdr =
+        function
+            | [List xs] ->
+                List <| List.tail xs
+            | _ ->
+                failwith "cdr takes exactly one argument"
+    let F_cdr = ("cdr", LispFunc (new Func<LispData list, LispData>(cdr)))
+    addBuiltin F_cdr
+    
     let private map = function
         | [LispFunc f; Ast.List xs] ->
             let apply x = f.Invoke([x])
