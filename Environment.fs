@@ -89,3 +89,9 @@ module Primitives =
         | args -> failwithf "map syntax: (map f xs).  called with %s" <| (Ast.List <| (Symbol "map")::args).ToString()
     let F_map = ("map", LispFunc (new Func<LispData list, LispData>(map)))
     addBuiltin F_map
+    
+    let private ``and`` xs = 
+        if List.length xs < 2 then
+            failwith "and takes at least two arguments"
+        else
+            if List.forall ((=) (snd S_t)) xs then S_t else S_nil
