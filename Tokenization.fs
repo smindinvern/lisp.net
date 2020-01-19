@@ -117,13 +117,18 @@ module Tokenization
             ; identifier
             ]
     
-    let whitespace : Parser<char, unit, char> =
-        oneOf <| List.map (~%) [' '; '\t'; '\r'; '\n']
+    let comment : Parser<char, unit, unit> =
+        parse {
+            do! ignore <@> %';'
+            do! ignore <@> parseUntil (pop1 <=> (inject '\n')) (inject ())
+        }
+    let whitespace : Parser<char, unit, unit> =
+        oneOf <| List.map (fun c -> ignore <@> %c) [' '; '\t'; '\r'; '\n']
     
     let parseUntilEOF (p: Tokenizer) : Parser<char, unit, Token list> =
         let eof =
             parse {
-                do! ignore <@> some whitespace
+                do! ignore <@> some (whitespace <|> comment)
                 return! isEOF
             }
         parseUntil eof p
