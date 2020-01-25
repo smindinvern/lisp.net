@@ -4,7 +4,7 @@ module Parsing
     open Macros
     open Macros.Types
     open Macros.Parsing
-    open Macros.Extensions
+    open Extensions
 
     open System.Collections.Generic
 
@@ -70,7 +70,8 @@ module Parsing
         modify (addBoundVars' vs)
 
     let rec pattern = function
-        | Symbol sym -> inject <| SymbolPattern sym
+        | Symbol sym ->
+            inject <| SymbolPattern (Ast.Binding(sym))
         | ConsCell (left, right) ->
             state {
                 let! l = pattern left
@@ -93,7 +94,7 @@ module Parsing
         | d -> inject <| Pattern.LiteralPattern d
 
     let rec patternVars = function
-        | SymbolPattern s -> [s]
+        | SymbolPattern b -> [b.sym]
         | ConsPattern (l, r) -> (patternVars l) @ (patternVars r)
         | ListPattern pats -> List.collect patternVars pats
         | Pattern.LiteralPattern _ -> []
@@ -144,6 +145,15 @@ module Parsing
     and expr = function
         | Symbol sym ->
             SymbolExpr <@> untagId sym
+            // TODO: Builtin environment needs to be added to BoundVars before this will work.
+//            state {
+//                let! s = get
+//                if s.BoundVars.Contains(sym) then
+//                    let! untagged = untagId sym
+//                    return SymbolExpr untagged
+//                else
+//                    return failwithf "Reference to undefined variable `%s'" sym
+//            }
         | Quote q ->
             // Untag identifiers.
             (QuotedExpr << fst) <@> untagSyms q

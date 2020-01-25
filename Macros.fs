@@ -35,23 +35,7 @@ module Types =
     // Match a Lisp list to a pattern to produce a set of bindings.
     type PatternMatcher = Parser<LispData, unit, Binding list>
 
-module Extensions =
-    open System.Collections.Generic
-    open System.Runtime.CompilerServices
-    open Types
-    
-    [<Extension>]
-    type Extensions() =
-        [<Extension>]
-        static member KeyValuePairs<'k, 'v>(d: IDictionary<'k, 'v>) =
-            Seq.zip (d.Keys) (d.Values)
-        [<Extension>]
-        static member tryGetValue<'k, 'v>(d: IDictionary<'k, 'v>, key: 'k) =
-            let v = ref Unchecked.defaultof<'v>
-            if d.TryGetValue(key, v) then
-                Some(!v)
-            else
-                None
+open Extensions
 
 let tagId (s: string) (i: int) =
     if s.Contains('#') || List.contains s ["let"; "case"; "lambda"; "if"] then

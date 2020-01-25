@@ -14,8 +14,9 @@ module Evaluation
         | _ -> None
     and bindPattern (pat: Pattern) (obj: LispData) : (Binding list) option =
         match pat with
-            | SymbolPattern s ->
-                Some [(s, obj)]
+            | SymbolPattern b ->
+                b.ldr := Option.Some(obj)
+                Some [b]
             | LiteralPattern l ->
                 if l = obj then
                     Some []
@@ -28,8 +29,13 @@ module Evaluation
                         concatOptions (bindPattern head h) (bindPattern tail (List t))
                     | _ -> None
     
+    open smindinvern.Utils
+
     let rec eval (scope: Scope) = function
-        | Symbol s -> Option.map (fun x -> (scope, x)) (lookup s scope) 
+        | Symbol s ->
+            Option.bind
+                (fun (x: Binding) -> Option.map (mkPair scope) !x.ldr)
+                (scope.Lookup(s)) 
         | List (f::args) ->
             match eval scope f with
                 | None -> None

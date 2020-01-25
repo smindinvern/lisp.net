@@ -66,15 +66,24 @@ module Ast
             (Ellipsis e, s)
         | x -> (x, s)
 
+    type Binding(s: string, ld: LispData option) =
+        class
+            let ldref = ref ld
+            new(sym: string) = Binding(sym, Option.None)
+            new(sym: string, ld: LispData) = Binding(sym, Option.Some(ld))
+            member __.ldr with get() = ldref
+            member __.sym with get() = s
+        end
+    
     type Pattern =
-        | SymbolPattern of string
+        | SymbolPattern of Binding
         | LiteralPattern of LispData
         | ListPattern of Pattern list
         | ConsPattern of Pattern * Pattern
         with
             member internal x.ToStringBuilder(sb: Text.StringBuilder) =
                 match x with
-                    | SymbolPattern s -> sb.Append(s)
+                    | SymbolPattern b -> sb.Append(b.sym)
                     | LiteralPattern ld -> ld.ToStringBuilder(sb)
                     | ListPattern pats ->
                         let append (y: Pattern) (sb: Text.StringBuilder) = y.ToStringBuilder(sb)

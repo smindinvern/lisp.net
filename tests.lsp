@@ -19,6 +19,7 @@
 (defun test1 ()
   (let ((fibs (fib 1 1 '() 20))
 	(correct '(10946 6765 4181 2584 1597 987 610 377 233 144 89 55 34 21 13 8 5 3 2 1)))
+    (println fibs)
     (= ((car fibs) . (cdr fibs)) correct)
     )
   )
@@ -201,6 +202,6 @@
 (defun apply (f) (f))
 
 (defun main ()
-  (forall apply '(test1 test2 test3 test4 test5 test6 test7 test8 test9 test10 test11 test12))
+  (forall apply '(test1 test2 test3)) ;; test4 test5 test6 test7 test8 test9 test10 test11 test12))
   )
 

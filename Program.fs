@@ -54,10 +54,10 @@ let runFile (fs: System.IO.StreamReader) =
     let data = Reader.read <| fs.ReadToEnd()
     let (macros, defuns) = Parsing.topLevel data
     let ctl = Compilation.compileTopLevel defuns
-    match Scope.lookup "main" ctl with
+    match ctl.Lookup("main") with
     | Option.Some(main) ->
         try
-            match Evaluation.eval ctl (Ast.List [main]) with
+            match Evaluation.eval ctl (Ast.List [(!main.ldr).Value]) with
             | Option.Some(_, result) ->
                 printfn "%s" (result.ToString())
             | Option.None ->
