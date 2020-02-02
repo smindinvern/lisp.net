@@ -43,14 +43,10 @@ module Parsing
             return untagSyms' s.BoundVars ld ()
         }
 
-    // TODO: optimize this.
     let tryGetMacro (m: string) : ExprParser<Macro option> =
         state {
             let! s = get
-            if s.Macros.ContainsKey(m) then
-                return Some <| s.Macros.[m]
-            else
-                return None
+            return s.Macros.tryGetValue(m)
         }
 
     let isBoundVar (v: string) : ExprParser<bool> =
