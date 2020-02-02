@@ -104,31 +104,24 @@ module Parsing
         match e with
         | LetExpr (bs, _) ->
             let (_, free') = foldExpr findFreeVars [] e
-            let (bound, free'') = List.unzip <| List.map (fun (pat, e) ->
-                let pvars = patternVars pat
-                let (_, evars) = findFreeVars e []
-                (pvars, List.except pvars evars)) bs
-            let bound = List.concat bound
-            let free' = List.distinct (free @ free' @ List.concat free'')
-            (e, List.except bound free')
+            (e, collectFreeVars (free @ free') bs)
         | CaseExpr (e', arms) ->
             let (_, free') = foldExpr findFreeVars [] e'
-            let findFreeInArm (pat: Pattern, es: Expr list) =
-                let pvars = patternVars pat
-                let (_, evars) = findFreeVars (ListExpr es) []
-                (pvars, List.except pvars evars)
-            let (bound, free'') = List.unzip <| List.map findFreeInArm arms
-            let bound = List.concat bound
-            let free' = List.distinct (free @ free' @ List.concat free'')
-            (e, List.except bound free')
+            let arms' = List.map (fun (pat, e) -> (pat, ListExpr e)) arms
+            (e, collectFreeVars (free @ free') arms')
         | LambdaExpr (args, body) ->
-            let pvars = List.collect patternVars args
-            let (_, evars) = findFreeVars (ListExpr body) []
-            let free' = List.distinct (free @ evars)
-            (e, List.except pvars free')
+            (e, collectFreeVars' free args body)
         | SymbolExpr s -> (e, s::free)
         | _ -> foldExpr findFreeVars free e
-    
+    and collectFreeVars' free pats exprs =
+        let pvars = List.collect patternVars pats
+        let (_, evars) = findFreeVars (ListExpr exprs) []
+        let free' = List.distinct (free @ evars)
+        List.except pvars free'
+    and collectFreeVars free bindings =
+        let (pats, exprs) = List.unzip bindings
+        collectFreeVars' free pats exprs
+
     let rec letBinding bindings body =
         let binding = function
             | List [p; e] ->
