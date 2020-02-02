@@ -59,6 +59,7 @@
 	(closure1 (sumClosure 2 2))
 	(closure2 (sumClosure 4 4))
 	)
+    (println (+ (closure1) (closure2)))
     (= (+ (closure1) (closure2)) 12)
     )
   )
@@ -190,6 +191,36 @@
   (= (f 2 4) 6)
   )
 
+(define-syntax and
+  (syntax-rules ()
+		((and x y)
+		 (if x y nil)
+		 )
+		)
+  )
+
+(defun test13 ()
+  (let ((n 13)
+	(x 0))
+    (let ((f (lambda (x)
+	       (lambda (y)
+		 (x . (y . (n . '())))
+		 )
+	       )
+	     )
+	  )
+      (let ((g (f x))
+	    (h (f n))
+	    )
+	(and
+	 (= (g 1) '(0 1 13))
+	 (= (h 2) '(13 2 13))
+	 )
+	)
+      )
+    )
+  )
+
 (defun forall (f xs)
   (case xs
 	(
@@ -202,6 +233,6 @@
 (defun apply (f) (f))
 
 (defun main ()
-  (forall apply '(test1 test2 test3)) ;; test4 test5 test6 test7 test8 test9 test10 test11 test12))
+  (forall apply '(test1 test2 test3 test4 test5 test6 test7 test8 test9 test10 test11 test12 test13))
   )
 

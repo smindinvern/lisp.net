@@ -122,10 +122,28 @@ module Ast
                         let body = intersperse body "\n" append
                         let inner (sb: Text.StringBuilder) = body ((bindings sb).Append('\n'))
                         (inner (sb.Append("(let "))).Append(')')
-                    | CaseExpr (e, arms) -> sb
-                    | IfExpr _ -> sb
+                    | CaseExpr (e, arms) ->
+                        let append (pat: Pattern, es: Expr list) (sb: Text.StringBuilder) =
+                            let f (sb: Text.StringBuilder) =
+                                intersperse es "\n" (fun (e: Expr) (sb: Text.StringBuilder) -> e.ToStringBuilder(sb)) (pat.ToStringBuilder(sb).Append('\n'))
+                            bracket f sb
+                        let arms = bracket <| intersperse arms "\n" append
+                        bracket (fun (sb: Text.StringBuilder) -> e.ToStringBuilder(sb).Append('\n').Append(bracket arms sb)) sb
+                    | IfExpr (test, ifTrue, ifFalse) ->
+                        let append (e: Expr option) (sb: Text.StringBuilder) =
+                            match e with
+                            | Option.None -> sb
+                            | Option.Some(e) -> e.ToStringBuilder(sb)
+                        let inner = intersperse [Option.Some(test); Option.Some(ifTrue); ifFalse] "\n" append
+                        bracket (fun (sb: Text.StringBuilder) -> inner <| sb.Append("if ")) sb
                     | QuotedExpr ld -> ld.ToStringBuilder(sb)
-                    | LambdaExpr _ -> sb
+                    | LambdaExpr (args, body) ->
+                        let intro (sb: Text.StringBuilder) = sb.Append("lambda ")
+                        let pat (p: Pattern) (sb: Text.StringBuilder) = p.ToStringBuilder(sb)
+                        let args = bracket <| intersperse args " " pat
+                        let append (e: Expr) (sb: Text.StringBuilder) = e.ToStringBuilder(sb)
+                        let body = intersperse body "\n" append
+                        bracket (fun (sb: Text.StringBuilder) -> body <| (args << intro <| sb).Append(' ')) sb
             override x.ToString() = x.ToStringBuilder(Text.StringBuilder()).ToString()
     and LetBinding = Pattern * Expr
         

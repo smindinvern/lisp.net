@@ -35,3 +35,11 @@ module Scope
                 Scoped<'k, 'v>([])
                 
     type Scope = Scoped<string, Binding>
+    
+    open System.Runtime.CompilerServices
+    
+    [<AbstractClass; Sealed; Extension>]
+    type Extensions =
+        [<Extension>]
+        static member LookupValue(scope: Scope, key: string) =
+            Option.bind (fun (b: Binding) -> !b.ldr) <| scope.Lookup(key)

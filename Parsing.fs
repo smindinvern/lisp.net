@@ -68,7 +68,7 @@ module Parsing
 
     let addBoundVars (vs: string list) : ExprParser<unit> =
         modify (addBoundVars' vs)
-
+    
     let rec pattern = function
         | Symbol sym ->
             inject <| SymbolPattern (Ast.Binding(sym))
@@ -93,12 +93,42 @@ module Parsing
         | LispFunc _ -> failwith "Functions cannot appear in patterns"
         | d -> inject <| Pattern.LiteralPattern d
 
-    let rec patternVars = function
-        | SymbolPattern b -> [b.sym]
-        | ConsPattern (l, r) -> (patternVars l) @ (patternVars r)
-        | ListPattern pats -> List.collect patternVars pats
+    let rec patternBindings = function
+        | SymbolPattern b -> [b]
+        | ConsPattern (l, r) -> (patternBindings l) @ (patternBindings r)
+        | ListPattern pats -> List.collect patternBindings pats
         | Pattern.LiteralPattern _ -> []
+    let patternVars = (List.map (fun (b: Ast.Binding) -> b.sym)) << patternBindings
 
+    let rec findFreeVars (e: Expr) (free: string list) =
+        match e with
+        | LetExpr (bs, _) ->
+            let (_, free') = foldExpr findFreeVars [] e
+            let (bound, free'') = List.unzip <| List.map (fun (pat, e) ->
+                let pvars = patternVars pat
+                let (_, evars) = findFreeVars e []
+                (pvars, List.except pvars evars)) bs
+            let bound = List.concat bound
+            let free' = List.distinct (free @ free' @ List.concat free'')
+            (e, List.except bound free')
+        | CaseExpr (e', arms) ->
+            let (_, free') = foldExpr findFreeVars [] e'
+            let findFreeInArm (pat: Pattern, es: Expr list) =
+                let pvars = patternVars pat
+                let (_, evars) = findFreeVars (ListExpr es) []
+                (pvars, List.except pvars evars)
+            let (bound, free'') = List.unzip <| List.map findFreeInArm arms
+            let bound = List.concat bound
+            let free' = List.distinct (free @ free' @ List.concat free'')
+            (e, List.except bound free')
+        | LambdaExpr (args, body) ->
+            let pvars = List.collect patternVars args
+            let (_, evars) = findFreeVars (ListExpr body) []
+            let free' = List.distinct (free @ evars)
+            (e, List.except pvars free')
+        | SymbolExpr s -> (e, s::free)
+        | _ -> foldExpr findFreeVars free e
+    
     let rec letBinding bindings body =
         let binding = function
             | List [p; e] ->
