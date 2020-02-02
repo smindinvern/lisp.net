@@ -14,12 +14,8 @@ module Tokenization
         | SymbolToken of string
     
     open smindinvern.Alternative
-    open smindinvern.Parser.Types
-    open smindinvern.Parser.LineInfo
-    open smindinvern.Parser.Primitives
     open smindinvern.Parser.Primitives.LineInfo
     open smindinvern.Parser.Combinators
-    open smindinvern.Parser.Combinators.LineInfo
     open smindinvern.Parser.Monad
     
     type Tokenizer = Parser<char, unit, Token>

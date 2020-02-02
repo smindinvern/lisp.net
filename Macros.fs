@@ -53,7 +53,6 @@ let tagIds ld i = fst <| tagIds' ld i
 module PatternMatching =
     open Types
     
-    open smindinvern
     open smindinvern.Alternative
     open smindinvern.Parser.Primitives
     open smindinvern.Parser.Monad
@@ -132,8 +131,6 @@ module internal Unique =
 module Transformers =
     open Types
     open Unique
-    
-    open Extensions
 
     module SyntaxRules =
 
@@ -256,7 +253,6 @@ module Parsing =
         | LispFunc _ -> failwith "Functions cannot appear in patterns"
         | d -> ConstantPattern d
     
-    open smindinvern
     open smindinvern.Alternative
     open smindinvern.Parser.Primitives
             

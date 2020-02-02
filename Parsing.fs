@@ -1,9 +1,7 @@
 module Parsing
 
     open Ast
-    open Macros
     open Macros.Types
-    open Macros.Parsing
     open Extensions
 
     open System.Collections.Generic
