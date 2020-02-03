@@ -30,17 +30,8 @@ module Compilation
         List.map (snd << ((|>) scope)) cexprs
     
     // Extract and return all Bindings from a Pattern as a list of key-value pairs.
-    let rec getPatternBindings' (p: Pattern) =
-        match p with
-        | SymbolPattern b ->
-            [(b.sym, b)]
-        | ListPattern ps ->
-            getPatternBindings ps
-        | ConsPattern (head, tail) ->
-            getPatternBindings [head; tail]
-        | LiteralPattern _ -> []
-    and getPatternBindings (ps: Pattern list) =
-        List.collect getPatternBindings' ps
+    let getPatternBindings (ps: Pattern list) =
+        List.map (fun (b: Binding) -> (b.sym, b)) <| Parsing.patternBindings (ListPattern ps)
     
     // Extract all Bindings from a list of Patterns and add them to the set of bindings
     // for the current compilation.
