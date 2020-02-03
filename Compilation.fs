@@ -103,7 +103,6 @@ module Compilation
             let (_, ld) = sequenceExpressions body scope
             (scope, ld)
         state {
-            // FIXME: this makes this a letrec-binding.
             let! exprs' = sequence <| List.map compileExpr exprs
             let! s = get
             do! addPatternBindings patterns
