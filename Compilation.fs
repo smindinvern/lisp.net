@@ -226,7 +226,7 @@ module Compilation
             do! put { s with Bindings = s.Bindings.Add(sym, b) }
             let! cfunc = compileFunction paramList body
             return fun scope ->
-                // Insert empty binding to allow recursive references to @sym.
+                // Insert binding into the dynamic scope so that it can be looked up and invoked.
                 let scope = scope.Add(b.sym, b)
                 let (scope', cfunc') = cfunc <| scope
                 // Update the binding to resolve to the compiled function.
