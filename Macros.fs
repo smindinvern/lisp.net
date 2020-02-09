@@ -147,8 +147,6 @@ module Transformers =
         let renameIdentifiers (bound: HashSet<string>) (ld: LispData) =
             renameIdentifiers' bound ld []
 
-        open Extensions
-
         let rec getEllipsisDepths' = function
             | Ast.List xs ->
                 List.collect getEllipsisDepths' xs
