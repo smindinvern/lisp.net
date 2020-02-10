@@ -14,41 +14,15 @@ module Compilation
 
     open Parsing
     
-    let discard (s: State<'s, 'a>) =
-        state {
-            let! original = get
-            let! a = s
-            do! put original
-            return a
-        }
-    
     // Evaluate a list of expressions in sequence, preserving modifications made to the
     // dynamic environment.
     let sequenceExpressions cexprs : State<Scope, LispData> =
-        //foldM (flip konst) (Symbol "nil") cexprs
-        state {
-            let! scope = get
-            let (scope', result) =
-                List.fold
-                    // Discard result of previous expression and evaluate the next one, threading
-                    // the current scope through the evaluation.
-                    (fun (scope, _) cexpr -> runState cexpr scope)
-                    // Start with the initial scope.  If the list is empty return 'nil.
-                    (scope, Symbol "nil")
-                    cexprs
-            do! put scope'
-            return result
-        }
+        foldM (flip konst) (Symbol "nil") cexprs
 
     // Evaluate a list of expressions in sequence, discarding modifications made to the
     // dynamic environment.
     let evalExpressions (cexprs: State<Scope, LispData> list) =
-        //sequence <| List.map discard cexprs
-        state {
-            let! scope = get
-            let results = List.map (snd << (flip runState <| scope)) cexprs
-            return results
-        }
+        sequence <| List.map discard cexprs
     
     // Extract and return all Bindings from a Pattern as a list of key-value pairs.
     let getPatternBindings (ps: Pattern list) =
