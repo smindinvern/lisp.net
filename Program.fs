@@ -53,7 +53,7 @@ let macroTestCase7 =
 let runFile (fs: System.IO.StreamReader) =
     let data = Reader.read <| fs.ReadToEnd()
     let (macros, defuns) = Parsing.topLevel data
-    let ctl = Compilation.compileTopLevel defuns
+    let ctl = Interpreter.compileTopLevel defuns
     match ctl.Lookup("main") with
     | Option.Some(main) ->
         try

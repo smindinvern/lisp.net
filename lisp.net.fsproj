@@ -15,7 +15,7 @@
     <Compile Include="Scope.fs" />
     <Compile Include="Environment.fs" />
     <Compile Include="Evaluation.fs" />
-    <Compile Include="Compilation.fs" />
+    <Compile Include="Interpreter.fs" />
     <Compile Include="Program.fs" />
   </ItemGroup>
 
