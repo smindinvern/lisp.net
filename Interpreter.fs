@@ -283,9 +283,6 @@ module Interpreter
     let scope : Scope = Scope([dict (List.map (fun (k, v: LispData) -> (k, Binding(k, v))) Builtins)])
     
     let compileTopLevel (t: TopLevel) : Scope =
-        let f (sym: string, ld: LispData) =
-            (sym, Binding(sym, ld))
-        let environment = List.map f Builtins
         let compiled = sequence <| List.map Compile.Defun t
-        let (x, compiled) = runState compiled { Bindings = Scope([dict environment]) }
+        let (_, compiled) = runState compiled { Bindings = scope }
         fst <| runState (sequence compiled) scope
