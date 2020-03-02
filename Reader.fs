@@ -8,12 +8,14 @@ module internal Parsers =
     open smindinvern.Alternative
     open smindinvern.Parser.Types
     open smindinvern.Parser.Primitives
+    open smindinvern.Parser.Primitives.RangeInfo
     open smindinvern.Parser.Combinators
+    open smindinvern.Parser.Combinators.RangeInfo
     open smindinvern.Parser.Monad
     
-    type LispReader<'a> = Parser<Token, unit, 'a>
+    type LispReader<'a> = Parser<LispToken, unit, 'a>
 
-    let (~%) (t: Token) : LispReader<Token> =
+    let (~%) (t: LispToken) : LispReader<LispToken> =
         parse {
             let! t' = pop1
             if t' = t then
@@ -87,10 +89,10 @@ module internal Parsers =
 open smindinvern.Parser
 
 let read (input: string) =
-    let ts = LineInfo.Tokenization.TokenizeString(input)
+    let ts = RangeInfo.Tokenization.TokenizeString(input)
     match Primitives.runParser Tokenization.tokens ts () with
     | (_, Result.Ok(tokens)) ->
-        let ts = Tokenization.Tokenize(tokens)
+        let ts = RangeInfo.Tokenization.Tokenize(tokens)
         match Primitives.runParser Parsers.read ts () with
         | (_, Result.Ok(data)) -> data
         | (s, Result.Error(e)) -> failwithf "read failed with: %A. Parser state = %A" e s

@@ -2,7 +2,7 @@ module Tokenization
 
     open smindinvern.Utils
     
-    type Token =
+    type LispToken =
         | LParen
         | RParen
         | SingleQuote
@@ -13,96 +13,116 @@ module Tokenization
         | FloatToken of double
         | SymbolToken of string
     
+    open smindinvern
     open smindinvern.Alternative
-    open smindinvern.Parser.Primitives.LineInfo
+    open smindinvern.Parser.Types
+    open smindinvern.Parser.RangeInfo
+    open smindinvern.Parser.Primitives
+    open smindinvern.Parser.Primitives.RangeInfo
     open smindinvern.Parser.Combinators
+    open smindinvern.Parser.Combinators.RangeInfo
     open smindinvern.Parser.Monad
     
-    type Tokenizer = Parser<char, unit, Token>
+    type Tokenizer<'a> = RangeInfo.Parser<char, unit, Token<'a>>
     
-    let (~%) (c: char) =
+    let (~%) (c: char) : Tokenizer<char> =
         parse {
-            let! x = pop1
-            if x = c then
-                return c
+            let! x = RangeInfo.popToken
+            if x.Value = c then
+                return x
             else
             return! error <| "Failed to match " + (string c)
         }
     
-    let matchChar c t = (konst t) <@> %c
+    let matchChar c (t: 'a) : Tokenizer<'a> =
+        parse {
+            let! x = %c
+            return Token.Create(t, x.Range)
+        }
     
-    let (~%%) (s: string) =
+    let (~%%) (s: string) : Tokenizer<string> =
         let cs = s.ToCharArray() |> List.ofArray
         parse {
-            do! ignore <@> (sequence <| List.map (~%) cs)
-            return s
+            let! cs = sequence <| List.map (~%) cs
+            return TChar.Concat(cs)
         }
     
-    let matchString s t = (konst t) <@> %%s
-    
-    let lParen : Tokenizer = matchChar '(' LParen
-    let rParen : Tokenizer = matchChar ')' RParen
-    let singleQuote : Tokenizer = matchChar '\'' SingleQuote
-    let dot : Tokenizer = matchChar '.' Dot
-    let ellipsis : Tokenizer = (konst (SymbolToken "...")) <@> %%"..."
-    let stringLit : Tokenizer =
+    let matchString s (t: 'a) : Tokenizer<'a> =
         parse {
-            do! ignore <@> %'"'
-            let! cs = parseUntil (peek1 <=> (inject '"')) pop1
-            do! ignore <@> %'"'
-            return StringToken (new string(List.toArray cs))
+            let! x = %%s
+            return Token.Create(t, x.Range)
         }
-    let digit : Parser<char, unit, char> = 
+    
+    let lParen : Tokenizer<LispToken> = matchChar '(' LParen
+    let rParen : Tokenizer<LispToken> = matchChar ')' RParen
+    let singleQuote : Tokenizer<LispToken> = matchChar '\'' SingleQuote
+    let dot : Tokenizer<LispToken> = matchChar '.' Dot
+    let ellipsis : Tokenizer<LispToken> = matchString "..." (SymbolToken "...")
+    let stringLit : Tokenizer<LispToken> =
         parse {
-            let! c = pop1
-            if System.Char.IsDigit(c) then
+            do! ignore <@> %'"'
+            let! cs = parseUntil (peek1 <=> (inject '"')) popToken
+            do! ignore <@> %'"'
+            let s = TChar.Concat(cs)
+            return Token.Create(StringToken s.Value, s.Range)
+        }
+    let digit : Tokenizer<char> = 
+        parse {
+            let! c = popToken
+            if System.Char.IsDigit(c.Value) then
                 return c
             else
             return! error <| "Expected digit but got '" + (string c) + "'."
         }
-    let numericLit : Tokenizer =
+    let numericLit : Tokenizer<LispToken> =
         parse {
-            let! maybeString = tryParse (%'+' <|> %'-')
-            let s = new string(Option.toArray maybeString)
+            let! sign = Option.toList <@> tryParse (%'+' <|> %'-')
             let! integral = some digit
-            let i = new string(List.toArray integral)
             let! f =
                 parse {
-                    do! ignore <@> %'.'
+                    let! dot = %'.'
                     let! digits = many digit
-                    return new string(List.toArray <| '.'::digits)
-                } <|> (inject "")
-            if i.Length = 0 && f.Length = 0 then
+                    return dot::digits
+                } <|> (inject [])
+            if integral.Length = 0 && f.Length = 0 then
                 return! error <| "Expected NumericLiteral"
-            elif f.Length > 0 then
-                return FloatToken <| System.Double.Parse(s + i + f)
             else
-                return IntToken <| System.Int32.Parse(s + i)
+                // Verify that the next character is either whitespace, a comment, or a ')'
+                let! nextChar = peek1
+                if not (List.contains nextChar [' '; '\t'; '\n'; ';'; ')']) then
+                    return! error <| "Expected NumericLiteral"
+                else
+                    let s = TChar.Concat(sign @ integral @ f)
+                    if f.Length > 0 then
+                        return Token.Create(FloatToken <| System.Double.Parse(s.Value), s.Range)
+                    else
+                        return Token.Create(IntToken <| System.Int32.Parse(s.Value), s.Range)
         }
     
-    let literal : Tokenizer = numericLit <|> stringLit
+    let literal : Tokenizer<LispToken> = numericLit <|> stringLit
     
-    let identifier : Tokenizer =
+    let identifier : Tokenizer<LispToken> =
         let isValidCharacter c =
-            System.Char.IsLetterOrDigit(c) || c = '_' || c = '-' || c = '*' || c = '/'
+            System.Char.IsLetterOrDigit(c) || List.contains c ['_'; '-'; '*'; '/']
         parse {
-            let! first = pop1
-            if isValidCharacter first && not(System.Char.IsDigit(first)) then
-                let! rest = parseUntil (isEOF <||> (not <@> (isValidCharacter <@> peek1))) pop1
-                return SymbolToken (new string(List.toArray(first::rest)))
+            let! first = popToken
+            if isValidCharacter first.Value && not(System.Char.IsDigit(first.Value)) then
+                let! rest = parseUntil (isEOF <||> (not <@> (isValidCharacter <@> peek1))) popToken
+                let s = TChar.Concat(first::rest)
+                return Token.Create(SymbolToken s.Value, s.Range)
             else
-                return! error <| "Expected letter or '_', got '" + (string first) + "'."
+                return! error <| "Expected letter or '_', got '" + (string first.Value) + "'."
         }
-    let builtin : Tokenizer =
+    let builtin : Tokenizer<LispToken> =
         parse {
-            let! c = pop1
-            if c = '+' || c = '-' || c = '*' || c = '/' || c = '=' then
-                return SymbolToken (new string([|c|]))
+            let! c = popToken
+            if List.contains c.Value ['+'; '-'; '*'; '/'; '='] then
+                return Token.Create(SymbolToken (string(c.Value)), c.Range)
             else
                 return! error <| "Not a builtin"
         }
     
-    let token : Tokenizer =
+    let token : Tokenizer<LispToken> =
         oneOf [ lParen
             ; rParen
             ; singleQuote
@@ -121,7 +141,7 @@ module Tokenization
     let whitespace : Parser<char, unit, unit> =
         oneOf <| List.map (fun c -> ignore <@> %c) [' '; '\t'; '\r'; '\n']
     
-    let parseUntilEOF (p: Tokenizer) : Parser<char, unit, Token list> =
+    let parseUntilEOF (p: Tokenizer<LispToken>) : Parser<char, unit, Token<LispToken> list> =
         let eof =
             parse {
                 do! ignore <@> some (whitespace <|> comment)
@@ -129,6 +149,5 @@ module Tokenization
             }
         parseUntil eof p
     
-    let tokens : Parser<char, unit, Token list> =
+    let tokens : Parser<char, unit, Token<LispToken> list> =
         parseUntilEOF token
-
