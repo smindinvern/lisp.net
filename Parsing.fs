@@ -116,6 +116,32 @@ module Parsing
         let (pats, exprs) = List.unzip bindings
         collectFreeVars' free pats exprs
 
+    module Patterns =
+        let (|If|_|) es =
+            match es with
+            | (Symbol s)::test::ifTrue::rest when s = "if" ->
+                let ifFalse =
+                    match rest with
+                    | [] -> Option.None
+                    | [ifFalse] -> Option.Some(ifFalse)
+                    | _ -> failwithf "Malformed if expression: %s" <| (List es).ToString()
+                Option.Some(test, ifTrue, ifFalse)
+            | _ -> Option.None
+        let (|Let|_|) = function
+            | (Symbol s)::(List bindings)::body when s = "let" ->
+                Option.Some(bindings, body)
+            | _ -> Option.None
+        let (|Case|_|) = function
+            | [ Symbol s; e; List arms ] when s = "case" ->
+                Option.Some(e, arms)
+            | _ -> Option.None
+        let (|Lambda|_|) = function
+            | (Symbol s)::(List paramList)::body when s = "lambda" ->
+                Option.Some(paramList, body)
+            | _ -> Option.None
+
+    open Patterns
+
     let rec letBinding bindings body =
         let binding = function
             | List [p; e] ->
@@ -176,41 +202,38 @@ module Parsing
             (QuotedExpr << fst) <@> untagSyms q
         | List es ->
             match es with
-                | (Symbol "if")::test::ifTrue::rest ->
-                    let ifFalse =
-                        match rest with
-                        | [] -> inject Option.None
-                        | [ifFalse] ->
-                            Option.Some <@> expr ifFalse
-                        | _ -> failwithf "Malformed if expression: %s" <| (List es).ToString()
-                    state {
-                        let! test = expr test
-                        let! ifTrue = expr ifTrue
-                        let! ifFalse = ifFalse
-                        return IfExpr (test, ifTrue, ifFalse)
-                    }
-                | (Symbol "let")::(List bindings)::body ->
-                    letBinding bindings body
-                | [ Symbol "case"; e; List arms ] ->
-                    state {
-                        let! e = expr e
-                        let! arms = sequence <| List.map caseArm arms
-                        return CaseExpr (e, arms)
-                    }
-                | (Symbol "lambda")::(List paramList)::body ->
-                    lambda paramList body
-                | (Symbol s)::args ->
-                    state {
-                        match! tryGetMacro s with
-                        | Option.Some(m) ->
-                            let ld = m.Transformer <| ((Symbol s)::args)
-                            return! expr ld
-                        | Option.None ->
-                            let! es = sequence <| List.map expr ((Symbol s)::args)
-                            return ListExpr es
-                    }
-                | es ->
-                    ListExpr <@> (sequence <| List.map expr es)
+            | If(test, ifTrue, ifFalse) ->
+                state {
+                    let! test = expr test
+                    let! ifTrue = expr ifTrue
+                    let! ifFalse =
+                        match ifFalse with
+                        | Option.Some(x) -> Option.Some <@> expr x
+                        | Option.None -> inject Option.None
+                    return IfExpr (test, ifTrue, ifFalse)
+                }
+            | Let(bindings, body) ->
+                letBinding bindings body
+            | Case(e, arms) ->
+                state {
+                    let! e = expr e
+                    let! arms = sequence <| List.map caseArm arms
+                    return CaseExpr (e, arms)
+                }
+            | Lambda(paramList, body) ->
+                lambda paramList body
+            | (Symbol s)::args ->
+                state {
+                    match! tryGetMacro s with
+                    | Option.Some(m) ->
+                        let ld = m.Transformer <| ((Symbol s)::args)
+                        return! expr ld
+                    | Option.None ->
+                        let! es = sequence <| List.map expr ((Symbol s)::args)
+                        return ListExpr es
+                }
+            | es ->
+                ListExpr <@> (sequence <| List.map expr es)
         | ConsCell (left, right) ->
             state {
                 let! l = expr left
