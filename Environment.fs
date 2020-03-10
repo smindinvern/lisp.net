@@ -10,10 +10,10 @@ let addBuiltin (form: string * LispData) =
     Builtins <- form::Builtins
 
 module Primitives =
-    let S_t = ("t", Symbol "t")
+    let S_t = ("t", Symbol(Binding("t")))
     addBuiltin S_t
     
-    let S_nil = ("nil", Symbol "nil")
+    let S_nil = ("nil", Symbol(Binding("nil")))
     addBuiltin S_nil
     
     let private eq2 (obj1: LispData) (obj2: LispData) =
@@ -86,7 +86,7 @@ module Primitives =
         | [LispFunc f; Ast.List xs] ->
             let apply x = f.Invoke([x])
             Ast.List <| List.map apply xs
-        | args -> failwithf "map syntax: (map f xs).  called with %s" <| (Ast.List <| (Symbol "map")::args).ToString()
+        | args -> failwithf "map syntax: (map f xs).  called with %s" <| (Ast.List <| (Symbol(Binding("map")))::args).ToString()
     let F_map = ("map", LispFunc (new Func<LispData list, LispData>(map)))
     addBuiltin F_map
     

@@ -14,15 +14,35 @@ module Ast
         let bracket (f: StringBuilder -> StringBuilder) (sb: StringBuilder) =
             (f <| sb.Append('(')).Append(')')
 
+    open System
     open Printing
     
-    type LispData =
+    type Binding(s: string, ld: LispData option) =
+        class
+            let ldref = ref ld
+            new(sym: string) = Binding(sym, Option.None)
+            new(sym: string, ld: LispData) = Binding(sym, Option.Some(ld))
+            member __.ldr with get() = ldref
+            member __.sym with get() = s
+            override Object.Equals(other: obj) =
+                match other with
+                | :? Binding as b ->
+                    if s = b.sym then
+                        let bref = !b.ldr
+                        ld = bref
+                    else
+                        false
+                | _ -> false
+            override Object.GetHashCode() =
+                s.GetHashCode()
+        end
+    and LispData =
         | List of LispData list
         | ConsCell of LispData * LispData
         | IntLiteral of int
         | FloatLiteral of float
         | StringLiteral of string
-        | Symbol of string
+        | Symbol of Binding
         | Quote of LispData
         | LispFunc of Func<LispData list, LispData>
         | Ellipsis of LispData  // This is only valid for macro templates.
@@ -38,13 +58,13 @@ module Ast
                 | IntLiteral i -> sb.Append(i)
                 | FloatLiteral f -> sb.Append(f)
                 | StringLiteral s -> sb.Append('"').Append(s).Append('"')
-                | Symbol s -> sb.Append(s)
+                | Symbol s -> sb.Append(s.sym)
                 | Quote q -> q.ToStringBuilder(sb.Append('\''))
                 | LispFunc f -> sb.Append(f.ToString())
                 | Ellipsis data -> data.ToStringBuilder(sb).Append(" ...")
             override x.ToString() =
                 x.ToStringBuilder(new Text.StringBuilder()).ToString()
-            
+
     let rec foldLispData (f: LispData -> 'state -> (LispData * 'state)) (s: 'state) (ld: LispData) =
         match ld with
         | List xs ->
@@ -65,15 +85,6 @@ module Ast
             let (e, s) = f e s
             (Ellipsis e, s)
         | x -> (x, s)
-
-    type Binding(s: string, ld: LispData option) =
-        class
-            let ldref = ref ld
-            new(sym: string) = Binding(sym, Option.None)
-            new(sym: string, ld: LispData) = Binding(sym, Option.Some(ld))
-            member __.ldr with get() = ldref
-            member __.sym with get() = s
-        end
     
     type Pattern =
         | SymbolPattern of Binding

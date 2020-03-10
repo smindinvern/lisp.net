@@ -27,7 +27,7 @@ module internal Parsers =
     let symbol : LispReader<LispData> =
         parse {
             match! pop1 with
-            | SymbolToken s -> return Symbol s
+            | SymbolToken s -> return Symbol(Binding(s))
             | t-> return! error <| sprintf "Expected Symbol, got %A" t
         }
 

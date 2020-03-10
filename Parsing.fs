@@ -34,7 +34,7 @@ module Parsing
 
     let rec internal untagSyms' boundVars ld () =
         match ld with
-            | Symbol s -> (Symbol <| untagId' boundVars s, ())
+            | Symbol s -> (Symbol(Ast.Binding(untagId' boundVars s.sym)), ())
             | x -> foldLispData (untagSyms' boundVars) () x
 
     let untagSyms ld =
@@ -65,7 +65,8 @@ module Parsing
     
     let rec pattern = function
         | Symbol sym ->
-            inject <| SymbolPattern (Ast.Binding(sym))
+            // TODO: use sym instead of sym.sym?
+            inject <| SymbolPattern (Ast.Binding(sym.sym))
         | ConsCell (left, right) ->
             state {
                 let! l = pattern left
@@ -74,7 +75,7 @@ module Parsing
             }
         | List ((Symbol s)::pats) ->
             state {
-                match! tryGetMacro s with
+                match! tryGetMacro s.sym with
                     | Some(m) ->
                         let ld = m.Transformer <| ((Symbol s)::pats)
                         return! pattern ld
@@ -119,7 +120,7 @@ module Parsing
     module Patterns =
         let (|If|_|) es =
             match es with
-            | (Symbol s)::test::ifTrue::rest when s = "if" ->
+            | (Symbol s)::test::ifTrue::rest when s.sym = "if" ->
                 let ifFalse =
                     match rest with
                     | [] -> Option.None
@@ -128,20 +129,20 @@ module Parsing
                 Option.Some(test, ifTrue, ifFalse)
             | _ -> Option.None
         let (|Let|_|) = function
-            | (Symbol s)::(List bindings)::body when s = "let" ->
+            | (Symbol s)::(List bindings)::body when s.sym = "let" ->
                 Option.Some(bindings, body)
             | _ -> Option.None
         let (|Case|_|) = function
-            | [ Symbol s; e; List arms ] when s = "case" ->
+            | [ Symbol s; e; List arms ] when s.sym = "case" ->
                 Option.Some(e, arms)
             | _ -> Option.None
         let (|Lambda|_|) = function
-            | (Symbol s)::(List paramList)::body when s = "lambda" ->
+            | (Symbol s)::(List paramList)::body when s.sym = "lambda" ->
                 Option.Some(paramList, body)
             | _ -> Option.None
-
+            
     open Patterns
-
+    
     let rec letBinding bindings body =
         let binding = function
             | List [p; e] ->
@@ -187,7 +188,7 @@ module Parsing
         }
     and expr = function
         | Symbol sym ->
-            SymbolExpr <@> untagId sym
+            SymbolExpr <@> untagId sym.sym
             // TODO: Builtin environment needs to be added to BoundVars before this will work.
 //            state {
 //                let! s = get
@@ -224,7 +225,7 @@ module Parsing
                 lambda paramList body
             | (Symbol s)::args ->
                 state {
-                    match! tryGetMacro s with
+                    match! tryGetMacro s.sym with
                     | Option.Some(m) ->
                         let ld = m.Transformer <| ((Symbol s)::args)
                         return! expr ld
@@ -240,27 +241,27 @@ module Parsing
                 let! r = expr right
                 return ConsExpr (l, r)
             }
-        | Ellipsis e -> failwith "Ellipses only allowed in macro definitions"
+        | Ellipsis _ -> failwith "Ellipses only allowed in macro definitions"
         | x -> inject <| LiteralExpr x
-
+    
     let private foldM (f: 'acc -> 'a -> State<'s, 'acc>) (s: State<'s, 'acc>) (xs: 'a list) : State<'s, 'acc> =
         let g = flip f
         List.fold (fun (s: State<'s, 'acc>) (x: 'a) -> (s >>= (g x))) s xs
 
     let defun defuns ld  =
         match ld with
-        | List ((Symbol "defun")::(Symbol name)::(List paramList)::body) ->
+        | List ((Symbol s)::(Symbol name)::(List paramList)::body) when s.sym = "defun" ->
             state {
                 let! paramList = sequence <| List.map pattern paramList
                 let! s = get
                 do! addBoundVars <| List.collect patternVars paramList
                 let! body = sequence <| List.map expr body
                 do! put s
-                let thisDefun = (name, paramList, body)
-                do! addBoundVars [name]
+                let thisDefun = (name.sym, paramList, body)
+                do! addBoundVars [name.sym]
                 return (thisDefun::defuns)
             }
-        | List ((Symbol "define-syntax")::rest) ->
+        | List ((Symbol s)::rest) when s.sym = "define-syntax" ->
             let m = Macros.Parsing.defineSyntax rest
             state {
                 let! s = get

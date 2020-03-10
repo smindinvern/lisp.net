@@ -45,7 +45,7 @@ let tagId (s: string) (i: int) =
 
 let rec tagIds' (ld: LispData) (i: int) =
     match ld with
-        | Symbol s -> (Symbol <| tagId s i, i)
+        | Symbol s -> (Symbol(Ast.Binding(tagId s.sym i)), i)
         | x -> foldLispData tagIds' i x
 let tagIds ld i = fst <| tagIds' ld i
 
@@ -137,9 +137,9 @@ module Transformers =
         let rec renameIdentifiers' (bound: HashSet<string>) (ld: LispData) (renames: (string * string) list) =
             match ld with
             | Symbol s ->
-                if bound.Contains(s) then
-                    let renamed = uniquify s
-                    (Symbol renamed, (s, renamed)::renames)
+                if bound.Contains(s.sym) then
+                    let renamed = uniquify s.sym
+                    (Symbol(Ast.Binding(renamed)), (s.sym, renamed)::renames)
                 else
                     (Symbol s, renames)
             | x -> foldLispData (renameIdentifiers' bound) renames x
@@ -153,7 +153,7 @@ module Transformers =
             | ConsCell (l, r) ->
                 getEllipsisDepths' (Ast.List [l; r])
             | Symbol s ->
-                [(s, 0)]
+                [(s.sym, 0)]
             | Quote q ->
                 getEllipsisDepths' q
             | Ellipsis e ->
@@ -199,7 +199,7 @@ module Transformers =
             | ConsCell (l, r) ->
                 ConsCell (transform bindings l, transform bindings r)
             | Symbol s ->
-                match bindings.tryGetValue(s) with
+                match bindings.tryGetValue(s.sym) with
                 | Option.None -> Symbol s
                 | Option.Some(Value v) -> v
                 | _ -> failwith "Incorrect ellipsis depth."
@@ -237,10 +237,10 @@ module Parsing =
     
     let rec pattern (literals : string list) = function
         | Symbol sym ->
-            if List.contains sym literals then
-                LiteralPattern sym
+            if List.contains sym.sym literals then
+                LiteralPattern sym.sym
             else
-                IdentifierPattern sym
+                IdentifierPattern sym.sym
         | ConsCell (l, r) ->
             SyntaxConsPattern (pattern literals l, pattern literals r)
         | List pats ->
@@ -279,10 +279,10 @@ module Parsing =
         | _ -> failwith "Invalid form for syntax-rule."
 
     let syntaxRules = function
-        | (Symbol "syntax-rules")::(List literals)::rules ->
+        | (Symbol s)::(List literals)::rules when s.sym = "syntax-rules" ->
             // TODO: check form of @literals
             let literals' = List.map (function
-                | Ast.Symbol s -> s
+                | Ast.Symbol s -> s.sym
                 | _ -> failwith "Literal list may only include identifiers.") literals
             List.map (syntaxRule literals') rules
         | _ -> failwith "Incorrect form for syntax-rules"
@@ -295,5 +295,5 @@ module Parsing =
                 match r with
                     | Result.Ok(result) -> result
                     | Result.Error(e) -> failwithf "%A" e
-            { Keyword = keyword; Transformer = runMacro }
+            { Keyword = keyword.sym; Transformer = runMacro }
         | _ -> failwith "Incorrect form for define-syntax"

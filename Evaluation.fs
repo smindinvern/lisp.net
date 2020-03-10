@@ -35,7 +35,7 @@ module Evaluation
         | Symbol s ->
             Option.bind
                 (fun (x: Binding) -> Option.map (mkPair scope) !x.ldr)
-                (scope.Lookup(s)) 
+                (scope.Lookup(s.sym)) 
         | List (f::args) ->
             match eval scope f with
                 | None -> None

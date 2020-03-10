@@ -17,7 +17,7 @@ module Interpreter
     // Evaluate a list of expressions in sequence, preserving modifications made to the
     // dynamic environment.
     let sequenceExpressions cexprs : State<Scope, LispData> =
-        foldM (flip konst) (Symbol "nil") cexprs
+        foldM (flip konst) (Symbol(Binding("nil"))) cexprs
 
     // Evaluate a list of expressions in sequence, discarding modifications made to the
     // dynamic environment.
@@ -101,9 +101,9 @@ module Interpreter
                 match evaled with
                 | [] -> return Ast.List []
                 | (Symbol f)::args ->
-                    match scope.LookupValue(f) with
+                    match scope.LookupValue(f.sym) with
                         | Some(LispFunc func) -> return func.Invoke(args)
-                        | _ -> return failwith <| sprintf "%s is not a callable object" f
+                        | _ -> return failwith <| sprintf "%s is not a callable object" f.sym
                 | (LispFunc func)::args ->
                     return func.Invoke(args)
                 | x::_ -> return failwith <| sprintf "%A is not a callable object" x
@@ -111,7 +111,7 @@ module Interpreter
         let If test ifTrue ifFalse : State<Scope, LispData> =
             state {
                 let! result = discard test
-                if result <> (Symbol "nil") then
+                if result <> (Symbol(Binding("nil"))) then
                     return! ifTrue
                 else
                     return! ifFalse
