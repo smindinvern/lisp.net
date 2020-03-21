@@ -24,16 +24,15 @@ module Ast
             new(sym: string, ld: LispData) = Binding(sym, Option.Some(ld))
             member __.ldr with get() = ldref
             member __.sym with get() = s
-            override Object.Equals(other: obj) =
+            override this.Equals(other: obj) =
                 match other with
                 | :? Binding as b ->
                     if s = b.sym then
-                        let bref = !b.ldr
-                        ld = bref
+                        this.ldr = b.ldr
                     else
                         false
                 | _ -> false
-            override Object.GetHashCode() =
+            override this.GetHashCode() =
                 s.GetHashCode()
         end
     and LispData =
@@ -103,7 +102,7 @@ module Ast
                     | ConsPattern (l, r) ->
                         r.ToStringBuilder(l.ToStringBuilder(sb.Append('(')).Append(" . ")).Append(')')
     and Expr =
-        | SymbolExpr of string
+        | SymbolExpr of Binding
         | LiteralExpr of LispData
         | ListExpr of Expr list
         | ConsExpr of Expr * Expr
@@ -115,7 +114,7 @@ module Ast
         with
             member internal x.ToStringBuilder(sb: Text.StringBuilder) =
                 match x with
-                    | SymbolExpr s -> sb.Append(s)
+                    | SymbolExpr s -> sb.Append(s.sym)
                     | LiteralExpr ld -> ld.ToStringBuilder(sb)
                     | ListExpr es -> 
                         let append (y: Expr) (sb: Text.StringBuilder) = y.ToStringBuilder(sb)

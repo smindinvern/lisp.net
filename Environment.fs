@@ -10,10 +10,12 @@ let addBuiltin (form: string * LispData) =
     Builtins <- form::Builtins
 
 module Primitives =
-    let S_t = ("t", Symbol(Binding("t")))
+    let t = Binding("t")
+    let S_t = ("t", Symbol(t))
     addBuiltin S_t
-    
-    let S_nil = ("nil", Symbol(Binding("nil")))
+
+    let nil = Binding("nil")
+    let S_nil = ("nil", Symbol(nil))
     addBuiltin S_nil
     
     let private eq2 (obj1: LispData) (obj2: LispData) =

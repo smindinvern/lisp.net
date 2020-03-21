@@ -9,10 +9,12 @@ module Interpreter
     open smindinvern.State.Lazy
     open smindinvern.Utils
     
+    open Environment
+    open Parsing
+
     type CompilerState = { Bindings: Scope }
     type Compiled = State<CompilerState, State<Scope, LispData>>
 
-    open Parsing
     
     // Evaluate a list of expressions in sequence, preserving modifications made to the
     // dynamic environment.
@@ -168,12 +170,16 @@ module Interpreter
                 | SymbolExpr s ->
                     state {
                         let! st = get
-                        match st.Bindings.Lookup(s) with
-                        | Some(b) ->
+                        match st.Bindings.Lookup(s.sym) with
+                        | Option.Some(b) ->
                             match !b.ldr with
                             | Option.Some(v) -> return inject v  // Compile-time constant
                             | Option.None -> return Runtime.ResolveBinding b
-                        | None -> return failwithf "Attempt to use free variable: %s" s
+                        | Option.None -> return failwithf "Attempt to use free variable: %s" s.sym
+                        // TODO: This doesn't work.
+                        // match !s.ldr with
+                        // | Option.Some(v) -> return inject v  // Compile-time constant
+                        // | Option.None -> return Runtime.ResolveBinding s
                     }
                 | LiteralExpr l -> inject <| inject l
                 | ListExpr es ->
@@ -228,7 +234,7 @@ module Interpreter
                     Expr (
                         match ifFalse with
                         | Some(x) -> x
-                        | None -> SymbolExpr "nil")
+                        | None -> SymbolExpr Environment.Primitives.nil)
                 let! ifTrue' = Expr ifTrue
                 let! test' = Expr test
                 return Runtime.If test' ifTrue' ifFalse'

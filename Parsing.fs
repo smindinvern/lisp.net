@@ -9,15 +9,15 @@ module Parsing
     open smindinvern.State.Lazy
     open smindinvern.Utils
     
-    type ParserState = { BoundVars: HashSet<string>
-                       ; Macros: IDictionary<string, Macro>
+    type ParserState = { Macros: IDictionary<string, Macro>
+                       ; Bindings: IDictionary<string, Ast.Binding>
                        }
 
     type ExprParser<'a> = State<ParserState, 'a>
 
-    let untagId' (boundVars: HashSet<string>) (sym: string) =
+    let untagId' (boundVars: IDictionary<string, Ast.Binding>) (sym: string) =
         if sym.Contains('#') then
-            if boundVars.Contains(sym) then
+            if boundVars.ContainsKey(sym) then
                 sym
             else
                 // identifier is free in this environment, so untag it.
@@ -29,7 +29,7 @@ module Parsing
     let untagId (sym: string) =
         state {
             let! s = get
-            return untagId' s.BoundVars sym
+            return untagId' s.Bindings sym
         }
 
     let rec internal untagSyms' boundVars ld () =
@@ -40,7 +40,7 @@ module Parsing
     let untagSyms ld =
         state {
             let! s = get
-            return untagSyms' s.BoundVars ld ()
+            return untagSyms' s.Bindings ld ()
         }
 
     let tryGetMacro (m: string) : ExprParser<Macro option> =
@@ -52,21 +52,22 @@ module Parsing
     let isBoundVar (v: string) : ExprParser<bool> =
         state {
             let! s = get
-            return s.BoundVars.Contains(v)
+            return s.Bindings.ContainsKey(v)
         }
 
-    let internal addBoundVars' vs ps =
-        let boundVarsSeq = Seq.cast ps.BoundVars
-        let boundVars' = new HashSet<string>(Seq.append boundVarsSeq (Seq.ofList vs))
-        { ps with BoundVars = boundVars' }
+    let internal addBoundVars' bs ps =
+        // TODO: is it a bug to insert a duplicate key here?
+        let bindingsSeq = Seq.map (fun (kvp: KeyValuePair<string, Ast.Binding>) -> (kvp.Key, kvp.Value)) <| Seq.cast ps.Bindings
+        let kvps = List.map (fun (b: Ast.Binding) -> (b.sym, b)) bs
+        let bindings' = Seq.append bindingsSeq kvps
+        { ps with Bindings = dict bindings' }
 
-    let addBoundVars (vs: string list) : ExprParser<unit> =
-        modify (addBoundVars' vs)
+    let addBoundVars (bs: Ast.Binding list) : ExprParser<unit> =
+        modify (addBoundVars' bs)
     
     let rec pattern = function
         | Symbol sym ->
-            // TODO: use sym instead of sym.sym?
-            inject <| SymbolPattern (Ast.Binding(sym.sym))
+            inject <| SymbolPattern sym
         | ConsCell (left, right) ->
             state {
                 let! l = pattern left
@@ -106,7 +107,7 @@ module Parsing
             (e, collectFreeVars (free @ free') arms')
         | LambdaExpr (args, body) ->
             (e, collectFreeVars' free args body)
-        | SymbolExpr s -> (e, s::free)
+        | SymbolExpr s -> (e, s.sym::free)
         | _ -> foldExpr findFreeVars free e
     and collectFreeVars' free pats exprs =
         let pvars = List.collect patternVars pats
@@ -152,7 +153,7 @@ module Parsing
                     // Parse the contents of @e *before* adding contents of @pat to the list of bound variables.
                     let! e' = expr e
                     // Anything bound within @e is dropped (as it is out of scope inside the let-binding body).
-                    do! put <| addBoundVars' (patternVars pat) s
+                    do! put <| addBoundVars' (patternBindings pat) s
                     return LetBinding (pat, e')
                 }
             | _ ->
@@ -180,7 +181,7 @@ module Parsing
         state {
             let! pats = sequence <| List.map pattern paramList
             let! s = get
-            do! addBoundVars (List.collect patternVars pats)
+            do! addBoundVars (List.collect patternBindings pats)
             let! body = sequence <| List.map expr body
             // Restore original state.
             do! put s
@@ -188,7 +189,7 @@ module Parsing
         }
     and expr = function
         | Symbol sym ->
-            SymbolExpr <@> untagId sym.sym
+            (SymbolExpr << Ast.Binding) <@> (untagId sym.sym)
             // TODO: Builtin environment needs to be added to BoundVars before this will work.
 //            state {
 //                let! s = get
@@ -254,11 +255,11 @@ module Parsing
             state {
                 let! paramList = sequence <| List.map pattern paramList
                 let! s = get
-                do! addBoundVars <| List.collect patternVars paramList
+                do! addBoundVars <| List.collect patternBindings paramList
                 let! body = sequence <| List.map expr body
                 do! put s
                 let thisDefun = (name.sym, paramList, body)
-                do! addBoundVars [name.sym]
+                do! addBoundVars [name]
                 return (thisDefun::defuns)
             }
         | List ((Symbol s)::rest) when s.sym = "define-syntax" ->
@@ -282,5 +283,5 @@ module Parsing
     let topLevel defuns =
         let parsed =
             foldM defun (inject <| []) defuns
-        let (s, defuns) = runState parsed { BoundVars = new HashSet<string>(); Macros = dict [] }
+        let (s, defuns) = runState parsed { Bindings = dict []; Macros = dict [] }
         (s.Macros, List.rev defuns)
