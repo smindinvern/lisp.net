@@ -464,16 +464,14 @@ module rec Parsing
                     dict <| Seq.map reshape bindings
 
                 let splitBindings (xs: (string * Values<LispData>) list) =
+                    let f (name, v) (c, e, r) =
+                        match v with
+                        | EllipsizedValue vs ->(c, (name, vs)::e, r)
+                        | Repeat v -> (c, e, (name, v)::r)
+                        | Value _ -> ((name, v)::c, e, r)
                     let (constants, ellipses, repeats) =
-                        List.unzip3 <|
-                        List.map (fun (name, v) ->
-                            match v with
-                            | EllipsizedValue vs -> (Option.None, Option.Some(name, vs), Option.None)
-                            | Repeat v -> (Option.None, Option.None, Option.Some(name, v))
-                            | Value _ -> (Option.Some(name, v), Option.None, Option.None)) xs
-                    (List.collect Option.toList constants,
-                     List.collect Option.toList ellipses,
-                     List.collect Option.toList repeats)
+                        List.foldBack f xs ([], [], [])
+                    (constants, ellipses, repeats)
 
                 // Expand ellipsized data, marking each occurrence of a macro-bound identifier.  These marks are used
                 // when parsing the output of the macro transformer to identify data that needs to be parsed in its
@@ -506,7 +504,7 @@ module rec Parsing
                     | [] -> ([], ())
                 and expandEllipsis (macroBindings: IDictionary<string, Values<LispData>>) (ld: LispData) () =
                     let kvps = List.ofSeq <| macroBindings.KeyValuePairs()
-                    let (constants, ellipsized, repeats) = Macros.Transformers.SyntaxRules.splitBindings kvps
+                    let (constants, ellipsized, repeats) = splitBindings kvps
                     let (names, ellipsized) = List.unzip ellipsized
                     let ellipsized' = List.transpose ellipsized
                     let repeat (ellipsized: Values<LispData> list) =
