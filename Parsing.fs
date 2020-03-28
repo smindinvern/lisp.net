@@ -304,9 +304,8 @@ module rec Parsing
                 // Add binding for this definition *first*, so that recursive references
                 // can be resolved.
                 do! addBoundVars [name]
-                let! paramList = sequence <| List.map pattern paramList
                 let! s = get
-                do! addBoundVars <| List.collect patternBindings paramList
+                let! paramList = sequence <| List.map pattern paramList
                 let! body = sequence <| List.map expressionParser.ParseExpression body
                 do! put s
                 let thisDefun = (name.sym, paramList, body)
