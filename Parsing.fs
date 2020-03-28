@@ -264,31 +264,31 @@ module rec Parsing
     
     let expressionParser = ExpressionParser()
     
-    type MacroParser(BoundValues : IDictionary<string, LispData>, Parse : LispData -> ExprParser<Expr>) =
+    type MacroParser(Parse : LispData -> ExprParser<Expr>) =
         class
             inherit ExpressionParser()
 
-            let rec transform (macroBindings: IDictionary<string, LispData>) (ld: LispData) =
-                let rec f (ld: LispData) (renames: IDictionary<string, LispData>) =
+            let rec transform (ld: LispData) =
+                let rec f (ld: LispData) () =
                     match ld with
                     | Ast.Symbol s ->
-                        match renames.tryGetValue(s.sym) with
-                        | Option.Some(realValue) -> (realValue, renames)
-                        | Option.None -> (ld, renames)
-                    | _ -> foldLispData f renames ld
-                fst <| foldLispData f macroBindings ld
+                        if s.sym.EndsWith('#') then
+                            ((!s.ldr).Value, ())
+                        else
+                            (Ast.Symbol s, ())
+                    | _ -> foldLispData f () ld
+                fst <| foldLispData f () ld
             
             override this.ParseSymbol b =
                 state {
-                    match BoundValues.tryGetValue(b.sym) with
-                    | Option.Some(v) ->
-                        return! Parse(v)
-                    | Option.None ->
+                    if b.sym.EndsWith('#') then
+                        return! Parse((!b.ldr).Value)
+                    else
                         return! expressionParser.ParseSymbol b
                 }
             
             override this.ParseQuote ld =
-                inject <| QuotedExpr (transform BoundValues ld)
+                inject <| QuotedExpr (transform ld)
         end
     
     let private foldM (f: 'acc -> 'a -> State<'s, 'acc>) (s: State<'s, 'acc>) (xs: 'a list) : State<'s, 'acc> =
@@ -503,36 +503,36 @@ module rec Parsing
                      List.collect Option.toList ellipses,
                      List.collect Option.toList repeats)
 
-                // Expand ellipsized data, replacing each occurrence of a macro-bound identifier with a
-                // unique (in *this* context) identifier, and adding a binding of the unique identifier to
-                // the original identifier to a lookup table to be consulted at parse time.
-                let rec expand (macroBindings: IDictionary<string, Values<LispData>>) (ld: LispData) (renames: IDictionary<string, LispData>) =
+                // Expand ellipsized data, marking each occurrence of a macro-bound identifier.  These marks are used
+                // when parsing the output of the macro transformer to identify data that needs to be parsed in its
+                // original context.
+                let rec expand (macroBindings: IDictionary<string, Values<LispData>>) (ld: LispData) () =
                     match ld with
                     | Ast.List templates ->
-                        let (ld, renames) = expandList macroBindings templates renames
+                        let (ld, renames) = expandList macroBindings templates ()
                         (Ast.List <| ld, renames)
                     | Symbol s ->
-                        // If this symbol is a macro-bound value, replace it with a name that is unique in this
-                        // context, and add an entry to @renames resolving to the data bound to this symbol.
+                        // If this symbol is a macro-bound value, replace it with a new marked identifier which
+                        // is bound to the corresponding data.
                         match macroBindings.tryGetValue(s.sym) with
-                        | Option.None -> (Symbol s, renames)
+                        | Option.None -> (Symbol s, ())
                         | Option.Some(Value v) ->
-                            let uniqueName = Macros.Transformers.SyntaxRules.uniquify s.sym
-                            (Symbol <| Ast.Binding(uniqueName, !s.ldr), renames.AddKeyValuePair(uniqueName, v))
+                            let uniqueName = sprintf "%s#" s.sym
+                            (Symbol <| Ast.Binding(uniqueName, v), ())
                         | _ -> failwith "Incorrect ellipsis depth."
-                    | _ -> foldLispData (expand macroBindings) renames ld
-                and expandList (macroBindings: IDictionary<string, Values<LispData>>) (ld: LispData list) (renames: IDictionary<string, LispData>) =
+                    | _ -> foldLispData (expand macroBindings) () ld
+                and expandList (macroBindings: IDictionary<string, Values<LispData>>) (ld: LispData list) () =
                     match ld with
                     | (Ellipsis e)::xs ->
-                        let (ld1, renames) = expandEllipsis macroBindings e renames
-                        let (ld2, renames) = expandList macroBindings xs renames
-                        (ld1 @ ld2, renames)
+                        let (ld1, _) = expandEllipsis macroBindings e ()
+                        let (ld2, _) = expandList macroBindings xs ()
+                        (ld1 @ ld2, ())
                     | x::xs ->
-                        let (ld1, renames) = expand macroBindings x renames
-                        let (ld2, renames) = expandList macroBindings xs renames
-                        (ld1::ld2, renames)
-                    | [] -> ([], renames)
-                and expandEllipsis (macroBindings: IDictionary<string, Values<LispData>>) (ld: LispData) (renames: IDictionary<string, LispData>) =
+                        let (ld1, _) = expand macroBindings x ()
+                        let (ld2, _) = expandList macroBindings xs ()
+                        (ld1::ld2, ())
+                    | [] -> ([], ())
+                and expandEllipsis (macroBindings: IDictionary<string, Values<LispData>>) (ld: LispData) () =
                     let kvps = List.ofSeq <| macroBindings.KeyValuePairs()
                     let (constants, ellipsized, repeats) = Macros.Transformers.SyntaxRules.splitBindings kvps
                     let (names, ellipsized) = List.unzip ellipsized
@@ -541,20 +541,14 @@ module rec Parsing
                         let xs = List.zip names ellipsized
                         let bindings = xs @ repeats @ constants
                         match ld with
-                        | Ellipsis e' -> expandEllipsis (dict bindings) e' renames
+                        | Ellipsis e' -> expandEllipsis (dict bindings) e' ()
                         | e ->
-                            let (ld, renames) = expand (dict bindings) e renames
-                            ([ld], renames)
+                            let (ld, _) = expand (dict bindings) e ()
+                            ([ld], ())
                     let xs = List.map repeat ellipsized'
-                    let (lds, renames) = List.unzip xs
-                    (List.concat lds, dict <| Seq.collect (fun (d: IDictionary<string, LispData>) -> d.KeyValuePairs()) renames)
+                    let (lds, _) = List.unzip xs
+                    (List.concat lds, ())
                     
-                let rec mapValues f = function
-                    | EllipsizedValue vs -> EllipsizedValue <| List.map (mapValues f) vs
-                    | Repeat v -> Repeat <| mapValues f v
-                    | Value v -> Value <| f v
-                let mapBinding f (Binding (s, v)) =
-                    Binding(s, mapValues f v)
                 let createTransformer (literals: string list) (template: LispData) (boundVars: HashSet<string>) =
                     // For each variable @x in the input pattern, rename all occurrences of @x in @template to be unique.
                     let (template, renames) = renameIdentifiers boundVars template
@@ -563,8 +557,8 @@ module rec Parsing
                     fun (bindings: Binding<LispData> list) (parse: LispData -> ExprParser<Expr>) ->
                         // Parse each matched datum in the context in which it appears.
                         let bindings = reshapeBindings bindings renames depths
-                        let (expanded, renames) = expand bindings template (dict [])
-                        let result = MacroParser(renames, parse).ParseExpression(expanded)
+                        let (expanded, _) = expand bindings template ()
+                        let result = MacroParser(parse).ParseExpression(expanded)
                         result
 
         module Parsing =
