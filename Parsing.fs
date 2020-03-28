@@ -30,12 +30,6 @@ module rec Parsing
             return s.Macros.tryGetValue(m)
         }
 
-    let isBoundVar (v: string) : ExprParser<bool> =
-        state {
-            let! s = get
-            return s.Bindings.ContainsKey(v)
-        }
-
     let internal addBoundVars' bs ps =
         // TODO: is it a bug to insert a duplicate key here?
         let bindingsSeq = Seq.map (fun (kvp: KeyValuePair<string, Ast.Binding>) -> (kvp.Key, kvp.Value)) <| Seq.cast ps.Bindings
