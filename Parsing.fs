@@ -131,7 +131,7 @@ module rec Parsing
                     | Lambda(paramList, body) -> this.ParseLambda paramList body
                     | es -> this.ParseList es
                 | ConsCell (left, right) -> this.ParseConsCell left right
-                | Ellipsis _ -> failwith "Ellipsis not allowed here."
+                | Ellipsis _ -> failwith "Ellipses only allowed in macro definitions"
                 | x -> inject <| LiteralExpr x
             
             abstract member ParseSymbol : Ast.Binding -> ExprParser<Expr>
@@ -215,25 +215,7 @@ module rec Parsing
                     // Restore original state.
                     do! put s
                     return LambdaExpr (pats, body)
-                }                
-            
-            member internal this.parseList ld =
-                match List.tryFindIndexBack (
-                                                function
-                                                    | Ellipsis _ -> true
-                                                    | _ -> false
-                                            ) ld with
-                | Option.Some(i) ->
-                    let (prefix, (Ellipsis e)::tail) = List.splitAt i ld
-                    state {
-                        let! e' = this.ParseEllipsis e
-                        let! prefix' = sequence <| List.map this.ParseExpression prefix
-                        let! tail' = sequence <| List.map this.ParseExpression tail
-                        return ListExpr (prefix' @ e' @ tail')
-                    }
-                | Option.None ->
-                    ListExpr <@> (sequence <| List.map this.ParseExpression ld)                
-                
+                }           
             
             abstract member ParseList : LispData list -> ExprParser<Expr>
             default this.ParseList ld =
@@ -246,9 +228,9 @@ module rec Parsing
                             resetI()
                             return! m.Transformer ((Symbol s)::args) (fun ld -> withState st <| this.ParseExpression ld)
                         | Option.None ->
-                            return! this.parseList ld
+                            return! ListExpr <@> (sequence <| List.map this.ParseExpression ld)
                     }
-                | _ -> this.parseList ld
+                | _ -> ListExpr <@> (sequence <| List.map this.ParseExpression ld)
             
             abstract member ParseConsCell : LispData -> LispData -> ExprParser<Expr>
             default this.ParseConsCell left right =
@@ -257,9 +239,6 @@ module rec Parsing
                     let! r = this.ParseExpression right
                     return ConsExpr (l, r)
                 }
-
-            abstract member ParseEllipsis : LispData -> ExprParser<Expr list>
-            default this.ParseEllipsis _ = failwith "Ellipses only allowed in macro definitions"
         end
     
     let expressionParser = ExpressionParser()
