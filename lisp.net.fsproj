@@ -10,10 +10,9 @@
     <Compile Include="Tokenization.fs" />
     <Compile Include="Ast.fs" />
     <Compile Include="Reader.fs" />
-    <Compile Include="Macros.fs" />
+    <Compile Include="Environment.fs" />
     <Compile Include="Parsing.fs" />
     <Compile Include="Scope.fs" />
-    <Compile Include="Environment.fs" />
     <Compile Include="Evaluation.fs" />
     <Compile Include="Interpreter.fs" />
     <Compile Include="Program.fs" />

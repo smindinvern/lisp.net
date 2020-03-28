@@ -1,4 +1,4 @@
-module Parsing
+module rec Parsing
 
     open Ast
     open Macros.Types
@@ -9,40 +9,21 @@ module Parsing
     open smindinvern.State.Lazy
     open smindinvern.Utils
     
-    type ParserState = { Macros: IDictionary<string, Macro>
-                       ; Bindings: IDictionary<string, Ast.Binding>
-                       }
+    open Patterns
 
+    let withState (s: 's) (m: State<'s, 'a>) =
+        state {
+            let! s' = get
+            do! put s
+            let! result = m
+            do! put s'
+            return result
+        }
+    
+    type ParserState = { Macros : IDictionary<string, Macro>
+                       ; Bindings : IDictionary<string, Ast.Binding> }
+    
     type ExprParser<'a> = State<ParserState, 'a>
-
-    let untagId' (boundVars: IDictionary<string, Ast.Binding>) (sym: string) =
-        if sym.Contains('#') then
-            if boundVars.ContainsKey(sym) then
-                sym
-            else
-                // identifier is free in this environment, so untag it.
-                let sym' = new string(Array.takeWhile (fun x -> x <> '#') <| sym.ToCharArray())
-                sym'
-        else
-            sym
-
-    let untagId (sym: string) =
-        state {
-            let! s = get
-            return untagId' s.Bindings sym
-        }
-
-    let rec internal untagSyms' boundVars ld () =
-        match ld with
-            | Symbol s -> (Symbol(Ast.Binding(untagId' boundVars s.sym)), ())
-            | x -> foldLispData (untagSyms' boundVars) () x
-
-    let untagSyms ld =
-        state {
-            let! s = get
-            return untagSyms' s.Bindings ld ()
-        }
-
     let tryGetMacro (m: string) : ExprParser<Macro option> =
         state {
             let! s = get
@@ -62,27 +43,20 @@ module Parsing
         let bindings' = Seq.append bindingsSeq kvps
         { ps with Bindings = dict bindings' }
 
-    let addBoundVars (bs: Ast.Binding list) : ExprParser<unit> =
+    let addBoundVars (bs: Ast.Binding list) =
         modify (addBoundVars' bs)
     
     let rec pattern = function
         | Symbol sym ->
-            inject <| SymbolPattern sym
+            state {
+                do! addBoundVars [sym]
+                return SymbolPattern sym
+            }
         | ConsCell (left, right) ->
             state {
                 let! l = pattern left
                 let! r = pattern right
                 return ConsPattern (l, r)
-            }
-        | List ((Symbol s)::pats) ->
-            state {
-                match! tryGetMacro s.sym with
-                    | Some(m) ->
-                        let ld = m.Transformer <| ((Symbol s)::pats)
-                        return! pattern ld
-                    | None ->
-                        let! subpats = sequence <| List.map pattern ((Symbol s)::pats)
-                        return ListPattern subpats
             }
         | List pats -> ListPattern <@> (sequence <| List.map pattern pats)
         | Quote _ -> failwith "Quoted expressions cannot appear in patterns"
@@ -141,125 +115,201 @@ module Parsing
             | (Symbol s)::(List paramList)::body when s.sym = "lambda" ->
                 Option.Some(paramList, body)
             | _ -> Option.None
+
+    type ExpressionParser() =
+        class
+            abstract member ParseExpression : LispData -> ExprParser<Expr>
+            default this.ParseExpression ld =
+                match ld with
+                | Symbol sym -> this.ParseSymbol sym
+                | Quote q -> this.ParseQuote q
+                | List es ->
+                    match es with
+                    | If(test, ifTrue, ifFalse) -> this.ParseIf test ifTrue ifFalse
+                    | Let(bindings, body) -> this.ParseLetBinding bindings body
+                    | Case(e, arms) -> this.ParseCase e arms
+                    | Lambda(paramList, body) -> this.ParseLambda paramList body
+                    | es -> this.ParseList es
+                | ConsCell (left, right) -> this.ParseConsCell left right
+                | Ellipsis _ -> failwith "Ellipsis not allowed here."
+                | x -> inject <| LiteralExpr x
             
-    open Patterns
-    
-    let rec letBinding bindings body =
-        let binding = function
-            | List [p; e] ->
+            abstract member ParseSymbol : Ast.Binding -> ExprParser<Expr>
+            default this.ParseSymbol b =
                 state {
-                    let! pat = pattern p
                     let! s = get
-                    // Parse the contents of @e *before* adding contents of @pat to the list of bound variables.
-                    let! e' = expr e
-                    // Anything bound within @e is dropped (as it is out of scope inside the let-binding body).
-                    do! put <| addBoundVars' (patternBindings pat) s
-                    return LetBinding (pat, e')
-                }
-            | _ ->
-                failwith "Invalid form for let-binding"
-        state {
-            let! s = get
-            let! bindings = sequence <| List.map binding bindings
-            let! body = sequence <| List.map expr body
-            // Restore original state.
-            do! put s
-            return LetExpr (bindings, body)
-        }
-    and caseArm = function
-        | List (p::es) ->
-            state {
-                let! s = get
-                let! pat = pattern p
-                let! es = sequence <| List.map expr es
-                // Restore original state.
-                do! put s
-                return (pat, es)
-            }
-        | _ -> failwith "Expected case-arm"
-    and lambda paramList body =
-        state {
-            let! pats = sequence <| List.map pattern paramList
-            let! s = get
-            do! addBoundVars (List.collect patternBindings pats)
-            let! body = sequence <| List.map expr body
-            // Restore original state.
-            do! put s
-            return LambdaExpr (pats, body)
-        }
-    and expr = function
-        | Symbol sym ->
-            (SymbolExpr << Ast.Binding) <@> (untagId sym.sym)
-            // TODO: Builtin environment needs to be added to BoundVars before this will work.
-//            state {
-//                let! s = get
-//                if s.BoundVars.Contains(sym) then
-//                    let! untagged = untagId sym
-//                    return SymbolExpr untagged
-//                else
-//                    return failwithf "Reference to undefined variable `%s'" sym
-//            }
-        | Quote q ->
-            // Untag identifiers.
-            (QuotedExpr << fst) <@> untagSyms q
-        | List es ->
-            match es with
-            | If(test, ifTrue, ifFalse) ->
+                    match s.Bindings.tryGetValue(b.sym) with
+                    | Option.Some(v) -> return SymbolExpr v
+                    | Option.None -> return SymbolExpr <| Ast.Binding(b.sym) // failwithf "Reference to undefined variable `%s'" b.sym
+                }                
+
+            abstract member ParseQuote : LispData -> ExprParser<Expr>
+            default this.ParseQuote q =
+                inject <| QuotedExpr q
+            
+            abstract member ParseIf : LispData -> LispData -> LispData option -> ExprParser<Expr>
+            default this.ParseIf test ifTrue ifFalse =
                 state {
-                    let! test = expr test
-                    let! ifTrue = expr ifTrue
+                    let! test = this.ParseExpression test
+                    let! ifTrue = this.ParseExpression ifTrue
                     let! ifFalse =
                         match ifFalse with
-                        | Option.Some(x) -> Option.Some <@> expr x
+                        | Option.Some(x) -> Option.Some <@> this.ParseExpression x
                         | Option.None -> inject Option.None
                     return IfExpr (test, ifTrue, ifFalse)
                 }
-            | Let(bindings, body) ->
-                letBinding bindings body
-            | Case(e, arms) ->
+
+            abstract member ParseLetBinding : LispData list -> LispData list -> ExprParser<Expr>
+            default this.ParseLetBinding bindings body =
+                let binding = function
+                    | List [p; e] ->
+                        state {
+                            let! pat = pattern p
+                            let! s = get
+                            // Parse the contents of @e *before* adding contents of @pat to the list of bound variables.
+                            let! e' = this.ParseExpression e
+                            // Anything bound within @e is dropped (as it is out of scope inside the let-binding body).
+                            do! put <| addBoundVars' (patternBindings pat) s
+                            return LetBinding (pat, e')
+                        }
+                    | _ ->
+                        failwith "Invalid form for let-binding"
                 state {
-                    let! e = expr e
-                    let! arms = sequence <| List.map caseArm arms
+                    let! s = get
+                    let! bindings = sequence <| List.map binding bindings
+                    let! body = sequence <| List.map this.ParseExpression body
+                    // Restore original state.
+                    do! put s
+                    return LetExpr (bindings, body)
+                }
+            
+            member this.caseArm = function
+                | List (p::es) ->
+                    state {
+                        let! s = get
+                        let! pat = pattern p
+                        let! es = sequence <| List.map this.ParseExpression es
+                        // Restore original state.
+                        do! put s
+                        return (pat, es)
+                    }
+                | _ -> failwith "Expected case-arm"
+
+            abstract member ParseCase : LispData -> LispData list -> ExprParser<Expr>
+            default this.ParseCase e arms =
+                state {
+                    let! e = this.ParseExpression e
+                    let! arms = sequence <| List.map this.caseArm arms
                     return CaseExpr (e, arms)
-                }
-            | Lambda(paramList, body) ->
-                lambda paramList body
-            | (Symbol s)::args ->
+                }                
+
+            // TODO: Lambda-captured values need to be resolved at runtime!
+            abstract member ParseLambda : LispData list -> LispData list -> ExprParser<Expr>
+            default this.ParseLambda paramList body =
                 state {
-                    match! tryGetMacro s.sym with
-                    | Option.Some(m) ->
-                        let ld = m.Transformer <| ((Symbol s)::args)
-                        return! expr ld
-                    | Option.None ->
-                        let! es = sequence <| List.map expr ((Symbol s)::args)
-                        return ListExpr es
+                    let! pats = sequence <| List.map pattern paramList
+                    let! s = get
+                    do! put { s with Bindings = dict [] }
+                    do! addBoundVars (List.collect patternBindings pats)
+                    let! body = sequence <| List.map this.ParseExpression body
+                    // Restore original state.
+                    do! put s
+                    return LambdaExpr (pats, body)
+                }                
+            
+            member internal this.parseList ld =
+                match List.tryFindIndexBack (
+                                                function
+                                                    | Ellipsis _ -> true
+                                                    | _ -> false
+                                            ) ld with
+                | Option.Some(i) ->
+                    let (prefix, (Ellipsis e)::tail) = List.splitAt i ld
+                    state {
+                        let! e' = this.ParseEllipsis e
+                        let! prefix' = sequence <| List.map this.ParseExpression prefix
+                        let! tail' = sequence <| List.map this.ParseExpression tail
+                        return ListExpr (prefix' @ e' @ tail')
+                    }
+                | Option.None ->
+                    ListExpr <@> (sequence <| List.map this.ParseExpression ld)                
+                
+            
+            abstract member ParseList : LispData list -> ExprParser<Expr>
+            default this.ParseList ld =
+                match ld with
+                | (Symbol s)::args ->
+                    state {
+                        match! tryGetMacro s.sym with
+                        | Option.Some(m) ->
+                            let! st = get
+                            resetI()
+                            return! m.Transformer ((Symbol s)::args) (fun ld -> withState st <| this.ParseExpression ld)
+                        | Option.None ->
+                            return! this.parseList ld
+                    }
+                | _ -> this.parseList ld
+            
+            abstract member ParseConsCell : LispData -> LispData -> ExprParser<Expr>
+            default this.ParseConsCell left right =
+                state {
+                    let! l = this.ParseExpression left
+                    let! r = this.ParseExpression right
+                    return ConsExpr (l, r)
                 }
-            | es ->
-                ListExpr <@> (sequence <| List.map expr es)
-        | ConsCell (left, right) ->
-            state {
-                let! l = expr left
-                let! r = expr right
-                return ConsExpr (l, r)
-            }
-        | Ellipsis _ -> failwith "Ellipses only allowed in macro definitions"
-        | x -> inject <| LiteralExpr x
+
+            abstract member ParseEllipsis : LispData -> ExprParser<Expr list>
+            default this.ParseEllipsis _ = failwith "Ellipses only allowed in macro definitions"
+        end
+    
+    let expressionParser = ExpressionParser()
+    
+    type MacroParser(BoundValues : IDictionary<string, LispData>, Parse : LispData -> ExprParser<Expr>) =
+        class
+            inherit ExpressionParser()
+
+            let rec transform (macroBindings: IDictionary<string, LispData>) (ld: LispData) =
+                let rec f (ld: LispData) (renames: IDictionary<string, LispData>) =
+                    match ld with
+                    | Ast.Symbol s ->
+                        match renames.tryGetValue(s.sym) with
+                        | Option.Some(realValue) -> (realValue, renames)
+                        | Option.None -> (ld, renames)
+                    | _ -> foldLispData f renames ld
+                fst <| foldLispData f macroBindings ld
+            
+            override this.ParseSymbol b =
+                state {
+                    match BoundValues.tryGetValue(b.sym) with
+                    | Option.Some(v) ->
+                        return! Parse(v)
+                    | Option.None ->
+                        return! expressionParser.ParseSymbol b
+                }
+            
+            override this.ParseQuote ld =
+                inject <| QuotedExpr (transform BoundValues ld)
+        end
     
     let private foldM (f: 'acc -> 'a -> State<'s, 'acc>) (s: State<'s, 'acc>) (xs: 'a list) : State<'s, 'acc> =
         let g = flip f
         List.fold (fun (s: State<'s, 'acc>) (x: 'a) -> (s >>= (g x))) s xs
 
+    
+    
     let defun defuns ld  =
         match ld with
         | List ((Symbol s)::(Symbol name)::(List paramList)::body) when s.sym = "defun" ->
             state {
+                // Add binding for this definition *first*, so that recursive references
+                // can be resolved.
+                do! addBoundVars [name]
                 let! paramList = sequence <| List.map pattern paramList
                 let! s = get
                 do! addBoundVars <| List.collect patternBindings paramList
-                let! body = sequence <| List.map expr body
+                let! body = sequence <| List.map expressionParser.ParseExpression body
                 do! put s
                 let thisDefun = (name.sym, paramList, body)
-                do! addBoundVars [name]
                 return (thisDefun::defuns)
             }
         | List ((Symbol s)::rest) when s.sym = "define-syntax" ->
@@ -280,8 +330,302 @@ module Parsing
             //     return defuns
             // }
 
+    let env =
+        Environment.Builtins
+        |> List.map (function
+            | (s, Symbol sym) -> (s, sym)
+            | (s, ld) -> (s, Ast.Binding(s, ld)))
+        |> dict
+    
     let topLevel defuns =
         let parsed =
             foldM defun (inject <| []) defuns
-        let (s, defuns) = runState parsed { Bindings = dict []; Macros = dict [] }
+        let (s, defuns) = runState parsed { Bindings = env; Macros = dict [] }
         (s.Macros, List.rev defuns)
+
+    module Macros =
+
+        open smindinvern
+        open smindinvern.Parser
+        open smindinvern.Parser.Types
+        
+        // See R6RS sections 11.18 and 11.19.
+        // This implementation uses SRFI 149 semantics.
+
+        module Types =
+            type Macro = { Keyword: string;
+                           Transformer: LispData list -> (LispData -> ExprParser<Expr>) -> ExprParser<Expr> }
+  
+            // Parse the pattern into a SyntaxPattern first.  This will make it
+            // easier to handle ellipses when constructing the PatternMatcher.
+            type SyntaxPattern =
+                | SyntaxListPattern of SyntaxPattern list
+                | SyntaxConsPattern of SyntaxPattern * SyntaxPattern
+                | IdentifierPattern of string
+                | LiteralPattern of string
+                | ConstantPattern of LispData 
+                | EllipsizedPattern of SyntaxPattern
+            
+            type Values<'a> =
+                | EllipsizedValue of Values<'a> list
+                | Repeat of Values<'a>
+                | Value of 'a
+            type Binding<'a> =
+                | Binding of string * Values<'a>
+
+            // Match a Lisp list to a pattern to produce a set of bindings.
+            type PatternMatcher = Parser<LispData, unit, Binding<LispData> list>
+
+        module PatternMatching =
+            open smindinvern.Alternative
+            open smindinvern.Parser.Primitives
+            open smindinvern.Parser.Monad
+            open smindinvern.Parser.Combinators
+                
+
+            let rec listMatcher' (pats: SyntaxPattern list) : PatternMatcher =
+                parse {
+                    let! result = List.concat <@> sequence (List.map patternMatcher pats)
+                    let! _ = isEOF <||> error "List not completely matched."
+                    return result
+                }
+            and listMatcher (pats: SyntaxPattern list) : PatternMatcher =
+                parse {
+                    match! pop1 with
+                    | Ast.List input ->
+                        let (_, r) = runParser (listMatcher' pats) (Parser.Tokenization.Tokenize(input)) ()
+                        return! liftResult r
+                    | _ -> return! error "List pattern did not match a list."
+                }
+            and patternMatcher : SyntaxPattern -> PatternMatcher = function
+                | EllipsizedPattern ep ->
+                    parse {
+                        let! matches = List.concat <@> some (patternMatcher ep)
+                        let xs = List.groupBy (fun (Binding (s, v)) -> s) matches
+                        let xs' = List.map (fun (name, bindings) -> Binding (name, EllipsizedValue <| List.map (fun (Binding (_, vs)) -> vs) bindings)) xs
+                        return xs'
+                    }
+                | SyntaxListPattern pats -> listMatcher pats
+                | SyntaxConsPattern (l, r) ->
+                    let l' = patternMatcher l
+                    let r' = patternMatcher r
+                    List.append <@> l' <*> r'
+                | IdentifierPattern id -> 
+                    // The *pattern* is an identifier, meaning that we bind whatever
+                    // datum is in this position of the input to the identifier.
+                    parse {
+                        let! datum = pop1
+                        return [Binding (id, Value datum)]
+                    }
+                | LiteralPattern lit ->
+                    // The pattern is an identifier that appears in the list of literals
+                    // in the `syntax-rules`.
+                    parse {
+                        match! pop1 with
+                        | Symbol id ->
+                            // TODO: Check that the input form is an identifier and that it has
+                            // TODO: the same lexical binding as the pattern literal or that both
+                            // TODO: it and the pattern literal have no lexical binding.
+                            return []
+                        | _ -> return! error <| "A pattern literal must match an identifier"
+                    }
+                | ConstantPattern c ->
+                    // The input must match the value of the constant pattern.
+                    parse {
+                        let! input = pop1
+                        if input = c then
+                            return []
+                        else
+                            return! error <| "Input does not match pattern constant."
+                    }
+        module Transformers =
+            module SyntaxRules =
+                let uniquify (s: string) = sprintf "%s#%i" s (nextI())
+                let rec renameIdentifiers' (bound: HashSet<string>) (ld: LispData) (renames: (string * string) list) =
+                    match ld with
+                    | Symbol s ->
+                        if bound.Contains(s.sym) then
+                            let renamed = uniquify s.sym
+                            (Symbol(Ast.Binding(renamed)), (s.sym, renamed)::renames)
+                        else
+                            (Symbol s, renames)
+                    | x -> foldLispData (renameIdentifiers' bound) renames x
+
+                let renameIdentifiers (bound: HashSet<string>) (ld: LispData) =
+                    renameIdentifiers' bound ld []
+
+                let rec getEllipsisDepths' = function
+                    | Ast.List xs ->
+                        List.collect getEllipsisDepths' xs
+                    | ConsCell (l, r) ->
+                        getEllipsisDepths' (Ast.List [l; r])
+                    | Symbol s ->
+                        [(s.sym, 0)]
+                    | Quote q ->
+                        getEllipsisDepths' q
+                    | Ellipsis e ->
+                        let results = getEllipsisDepths' e
+                        List.map (fun (k, v) -> (k, v + 1)) results
+                    | _ -> []
+
+                let getEllipsisDepths x = dict <| getEllipsisDepths' x
+
+                let rec getBindingEllipsisDepth = function
+                    | EllipsizedValue (v::_) -> (getBindingEllipsisDepth v) + 1
+                    | Value _ -> 0
+
+                let rec repeatNTimes (v: Values<'a>) (n: int) =
+                    if n = 0 then
+                        v
+                    else
+                        repeatNTimes (Repeat v) (n - 1)
+
+                // Add repeats to ellipsized bindings to replicate inputs as necessary.
+                let reshapeBindings (bindings: Binding<'a> list) (renames: (string * string) list) (depths: IDictionary<string, int>) =
+                    // For each variable @x in the input pattern with corresponding, uniquely-named instances @x_1..@x_n in the template,
+                    // map each @x_i to the set of values bound to @x in the input.
+                    let bindingsDict = dict <| List.map (fun (Binding (name, v)) -> (name, v)) bindings
+                    let bindings = List.map (fun (old_name, new_name) -> (new_name, bindingsDict.[old_name])) renames
+                    // If the number of ellipses following a variable in the template exceeds the number of ellipses following
+                    // the variable in the input pattern, the bound values are repeated in the output.
+                    let reshape (name: string, v: Values<'a>) =
+                        (name, repeatNTimes v ((depths.[name]) - (getBindingEllipsisDepth v)))
+                    dict <| Seq.map reshape bindings
+
+                let splitBindings (xs: (string * Values<LispData>) list) =
+                    let (constants, ellipses, repeats) =
+                        List.unzip3 <|
+                        List.map (fun (name, v) ->
+                            match v with
+                            | EllipsizedValue vs -> (Option.None, Option.Some(name, vs), Option.None)
+                            | Repeat v -> (Option.None, Option.None, Option.Some(name, v))
+                            | Value _ -> (Option.Some(name, v), Option.None, Option.None)) xs
+                    (List.collect Option.toList constants,
+                     List.collect Option.toList ellipses,
+                     List.collect Option.toList repeats)
+
+                // Expand ellipsized data, replacing each occurrence of a macro-bound identifier with a
+                // unique (in *this* context) identifier, and adding a binding of the unique identifier to
+                // the original identifier to a lookup table to be consulted at parse time.
+                let rec expand (macroBindings: IDictionary<string, Values<LispData>>) (ld: LispData) (renames: IDictionary<string, LispData>) =
+                    match ld with
+                    | Ast.List templates ->
+                        let (ld, renames) = expandList macroBindings templates renames
+                        (Ast.List <| ld, renames)
+                    | Symbol s ->
+                        // If this symbol is a macro-bound value, replace it with a name that is unique in this
+                        // context, and add an entry to @renames resolving to the data bound to this symbol.
+                        match macroBindings.tryGetValue(s.sym) with
+                        | Option.None -> (Symbol s, renames)
+                        | Option.Some(Value v) ->
+                            let uniqueName = Macros.Transformers.SyntaxRules.uniquify s.sym
+                            (Symbol <| Ast.Binding(uniqueName, !s.ldr), renames.AddKeyValuePair(uniqueName, v))
+                        | _ -> failwith "Incorrect ellipsis depth."
+                    | _ -> foldLispData (expand macroBindings) renames ld
+                and expandList (macroBindings: IDictionary<string, Values<LispData>>) (ld: LispData list) (renames: IDictionary<string, LispData>) =
+                    match ld with
+                    | (Ellipsis e)::xs ->
+                        let (ld1, renames) = expandEllipsis macroBindings e renames
+                        let (ld2, renames) = expandList macroBindings xs renames
+                        (ld1 @ ld2, renames)
+                    | x::xs ->
+                        let (ld1, renames) = expand macroBindings x renames
+                        let (ld2, renames) = expandList macroBindings xs renames
+                        (ld1::ld2, renames)
+                    | [] -> ([], renames)
+                and expandEllipsis (macroBindings: IDictionary<string, Values<LispData>>) (ld: LispData) (renames: IDictionary<string, LispData>) =
+                    let kvps = List.ofSeq <| macroBindings.KeyValuePairs()
+                    let (constants, ellipsized, repeats) = Macros.Transformers.SyntaxRules.splitBindings kvps
+                    let (names, ellipsized) = List.unzip ellipsized
+                    let ellipsized' = List.transpose ellipsized
+                    let repeat (ellipsized: Values<LispData> list) =
+                        let xs = List.zip names ellipsized
+                        let bindings = xs @ repeats @ constants
+                        match ld with
+                        | Ellipsis e' -> expandEllipsis (dict bindings) e' renames
+                        | e ->
+                            let (ld, renames) = expand (dict bindings) e renames
+                            ([ld], renames)
+                    let xs = List.map repeat ellipsized'
+                    let (lds, renames) = List.unzip xs
+                    (List.concat lds, dict <| Seq.collect (fun (d: IDictionary<string, LispData>) -> d.KeyValuePairs()) renames)
+                    
+                let rec mapValues f = function
+                    | EllipsizedValue vs -> EllipsizedValue <| List.map (mapValues f) vs
+                    | Repeat v -> Repeat <| mapValues f v
+                    | Value v -> Value <| f v
+                let mapBinding f (Binding (s, v)) =
+                    Binding(s, mapValues f v)
+                let createTransformer (literals: string list) (template: LispData) (boundVars: HashSet<string>) =
+                    // For each variable @x in the input pattern, rename all occurrences of @x in @template to be unique.
+                    let (template, renames) = renameIdentifiers boundVars template
+                    // Get the number of ellipses each variable in @template is followed by
+                    let depths = getEllipsisDepths template
+                    fun (bindings: Binding<LispData> list) (parse: LispData -> ExprParser<Expr>) ->
+                        // Parse each matched datum in the context in which it appears.
+                        let bindings = reshapeBindings bindings renames depths
+                        let (expanded, renames) = expand bindings template (dict [])
+                        let result = MacroParser(renames, parse).ParseExpression(expanded)
+                        result
+
+        module Parsing =
+            open smindinvern.Alternative
+            open smindinvern.Parser.Primitives
+            
+            let rec pattern (literals : string list) = function
+                | Symbol sym ->
+                    if List.contains sym.sym literals then
+                        LiteralPattern sym.sym
+                    else
+                        IdentifierPattern sym.sym
+                | ConsCell (l, r) ->
+                    SyntaxConsPattern (pattern literals l, pattern literals r)
+                | List pats ->
+                    SyntaxListPattern <| List.map (pattern literals) pats
+                | Ellipsis pat ->
+                    EllipsizedPattern <| pattern literals pat
+                | Quote _ -> failwith "Quoted expressions cannot appear in patterns"
+                | LispFunc _ -> failwith "Functions cannot appear in patterns"
+                | d -> ConstantPattern d
+            
+            let rec srPatternVars = function
+                | IdentifierPattern s -> [s]
+                | SyntaxListPattern pats -> List.collect srPatternVars pats
+                | SyntaxConsPattern (l, r) -> List.collect srPatternVars [l; r]
+                | EllipsizedPattern e -> srPatternVars e
+                | _ -> []
+                
+            let syntaxRule' (literals: string list) (ps: LispData list) (template: LispData) =
+                let (p::pats) = List.map (pattern literals) ps
+                let boundVars = new HashSet<string>(List.collect srPatternVars pats)
+                let matcher = PatternMatching.listMatcher' (p::pats)
+                let transformer = Transformers.SyntaxRules.createTransformer literals template boundVars
+                Parser.Monad.parse {
+                    let! (_::bindings) = matcher
+                    return! catch <| lazy (transformer bindings)
+                }
+                    
+            let syntaxRule (literals: string list) = function
+                | Ast.List [Ast.List patterns; template] ->
+                    syntaxRule' literals patterns template
+                | _ -> failwith "Invalid form for syntax-rule."
+
+            let syntaxRules = function
+                | (Symbol s)::(List literals)::rules when s.sym = "syntax-rules" ->
+                    // TODO: check form of @literals
+                    let literals' = List.map (function
+                        | Ast.Symbol s -> s.sym
+                        | _ -> failwith "Literal list may only include identifiers.") literals
+                    List.map (syntaxRule literals') rules
+                | _ -> failwith "Incorrect form for syntax-rules"
+                
+            let defineSyntax = function
+                | [Symbol keyword; Ast.List syntax_rules] ->
+                    let rules = syntaxRules syntax_rules
+                    let runMacro (input: LispData list) =
+                        let (_, r) = runParser (Parser.Combinators.oneOf rules) (Parser.Tokenization.Tokenize(input)) ()
+                        match r with
+                            | Result.Ok(result) -> result
+                            | Result.Error(e) -> failwithf "%A" e
+                    { Keyword = keyword.sym; Transformer = runMacro }
+                | _ -> failwith "Incorrect form for define-syntax"

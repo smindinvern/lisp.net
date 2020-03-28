@@ -1,5 +1,11 @@
 module Ast
 
+    let mutable private i : int = 0
+    let nextI () =
+        i <- i + 1
+        i
+    let resetI () =
+        i <- 0
     open System
 
     module Printing =

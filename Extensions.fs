@@ -14,3 +14,6 @@
                 Some(!v)
             else
                 None
+        [<Extension>]
+        static member AddKeyValuePair<'k, 'v when 'k : equality>(d: IDictionary<'k, 'v>, k: 'k, v: 'v) =
+            dict <| (k, v)::(List.ofSeq <| d.KeyValuePairs())
