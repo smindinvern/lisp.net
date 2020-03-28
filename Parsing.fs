@@ -169,7 +169,7 @@ module rec Parsing
                             // Parse the contents of @e *before* adding contents of @pat to the list of bound variables.
                             let! e' = this.ParseExpression e
                             // Anything bound within @e is dropped (as it is out of scope inside the let-binding body).
-                            do! put <| addBoundVars' (patternBindings pat) s
+                            do! put s
                             return LetBinding (pat, e')
                         }
                     | _ ->
@@ -207,10 +207,9 @@ module rec Parsing
             abstract member ParseLambda : LispData list -> LispData list -> ExprParser<Expr>
             default this.ParseLambda paramList body =
                 state {
-                    let! pats = sequence <| List.map pattern paramList
                     let! s = get
                     do! put { s with Bindings = dict [] }
-                    do! addBoundVars (List.collect patternBindings pats)
+                    let! pats = sequence <| List.map pattern paramList
                     let! body = sequence <| List.map this.ParseExpression body
                     // Restore original state.
                     do! put s
