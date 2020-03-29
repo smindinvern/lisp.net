@@ -32,9 +32,8 @@ module rec Parsing
 
     let internal addBoundVars' bs ps =
         // TODO: is it a bug to insert a duplicate key here?
-        let bindingsSeq = Seq.map (fun (kvp: KeyValuePair<string, Ast.Binding>) -> (kvp.Key, kvp.Value)) <| Seq.cast ps.Bindings
         let kvps = List.map (fun (b: Ast.Binding) -> (b.sym, b)) bs
-        let bindings' = Seq.append bindingsSeq kvps
+        let bindings' = Seq.append (ps.Bindings.KeyValuePairs()) kvps
         { ps with Bindings = dict bindings' }
 
     let addBoundVars (bs: Ast.Binding list) =
