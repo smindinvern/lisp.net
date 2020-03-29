@@ -408,6 +408,21 @@ module rec Parsing
         module Transformers =
             module SyntaxRules =
                 let uniquify (s: string) = sprintf "%s#%i" s (nextI())
+
+                // For each pattern variable @x that appears in the template, rename each occurrence of @x so that
+                // if @x appears in two different locations, each followed by a different number of ellipses, we can
+                // repeat each one the appropriate number of times.
+                //
+                // Example:
+                // (define-syntax macro
+                //   (syntax-rules
+                //    () ((macro ((a b ...) ...))
+                //        '((a ... a b) ... ...)  ;; each occurrence of `a' is followed by 3 and 2 ellipses, respectively.
+                //        )
+                //    )
+                //   )
+                // (macro6 ((a b c) (d e f)))
+                //   => '((a d a b) (a d d c) (a d a e) (a d d f))
                 let rec renameIdentifiers' (bound: HashSet<string>) (ld: LispData) (renames: (string * string) list) =
                     match ld with
                     | Symbol s ->
