@@ -467,12 +467,12 @@ module rec Parsing
                 let reshapeBindings (bindings: MacroBinding<'a> list) (renames: (string * string) list) (depths: IDictionary<string, int>) =
                     // For each variable @x in the input pattern with corresponding, uniquely-named instances @x_1..@x_n in the template,
                     // map each @x_i to the set of values bound to @x in the input.
-                    let bindingsDict = dict <| List.map (fun (MacroBinding (name, v)) -> (name, v)) bindings
+                    let bindingsDict = dict <| List.map (fun (MacroBinding (name, v)) -> (name, (v, getBindingEllipsisDepth v))) bindings
                     let bindings = List.map (fun (old_name, new_name) -> (new_name, bindingsDict.[old_name])) renames
                     // If the number of ellipses following a variable in the template exceeds the number of ellipses following
                     // the variable in the input pattern, the bound values are repeated in the output.
-                    let reshape (name: string, v: Values<'a>) =
-                        (name, repeatNTimes v ((depths.[name]) - (getBindingEllipsisDepth v)))
+                    let reshape (name: string, (v: Values<'a>, bindingEllipsisDepth)) =
+                        (name, repeatNTimes v ((depths.[name]) - bindingEllipsisDepth))
                     dict <| Seq.map reshape bindings
 
                 let splitBindings (xs: (string * Values<LispData>) list) =
