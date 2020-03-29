@@ -169,14 +169,6 @@ module Interpreter
             match e with
                 | SymbolExpr s ->
                     state {
-//                        let! st = get
-//                        match st.Bindings.Lookup(s.sym) with
-//                        | Option.Some(b) ->
-//                            match !b.ldr with
-//                            | Option.Some(v) -> return inject v  // Compile-time constant
-//                            | Option.None -> return Runtime.ResolveBinding b
-//                        | Option.None -> return failwithf "Attempt to use free variable: %s" s.sym
-                        // TODO: This doesn't work.
                         match !s.ldr with
                         | Option.Some(v) -> return inject v  // Compile-time constant
                         | Option.None -> return Runtime.ResolveBinding s
