@@ -266,8 +266,6 @@ module rec Parsing
         let g = flip f
         List.fold (fun (s: State<'s, 'acc>) (x: 'a) -> (s >>= (g x))) s xs
 
-    
-    
     let defun defuns ld  =
         match ld with
         | List ((Symbol s)::(Symbol name)::(List paramList)::body) when s.sym = "defun" ->
@@ -340,18 +338,17 @@ module rec Parsing
                 | EllipsizedValue of Values<'a> list
                 | Repeat of Values<'a>
                 | Value of 'a
-            type Binding<'a> =
-                | Binding of string * Values<'a>
+            type MacroBinding<'a> =
+                | MacroBinding of string * Values<'a>
 
             // Match a Lisp list to a pattern to produce a set of bindings.
-            type PatternMatcher = Parser<LispData, unit, Binding<LispData> list>
+            type PatternMatcher = Parser<LispData, unit, MacroBinding<LispData> list>
 
         module PatternMatching =
             open smindinvern.Alternative
             open smindinvern.Parser.Primitives
             open smindinvern.Parser.Monad
             open smindinvern.Parser.Combinators
-                
 
             let rec listMatcher' (pats: SyntaxPattern list) : PatternMatcher =
                 parse {
@@ -371,8 +368,8 @@ module rec Parsing
                 | EllipsizedPattern ep ->
                     parse {
                         let! matches = List.concat <@> some (patternMatcher ep)
-                        let xs = List.groupBy (fun (Binding (s, v)) -> s) matches
-                        let xs' = List.map (fun (name, bindings) -> Binding (name, EllipsizedValue <| List.map (fun (Binding (_, vs)) -> vs) bindings)) xs
+                        let xs = List.groupBy (fun (MacroBinding (s, v)) -> s) matches
+                        let xs' = List.map (fun (name, bindings) -> MacroBinding (name, EllipsizedValue <| List.map (fun (MacroBinding (_, vs)) -> vs) bindings)) xs
                         return xs'
                     }
                 | SyntaxListPattern pats -> listMatcher pats
@@ -385,7 +382,7 @@ module rec Parsing
                     // datum is in this position of the input to the identifier.
                     parse {
                         let! datum = pop1
-                        return [Binding (id, Value datum)]
+                        return [MacroBinding (id, Value datum)]
                     }
                 | LiteralPattern lit ->
                     // The pattern is an identifier that appears in the list of literals
@@ -451,10 +448,11 @@ module rec Parsing
                         repeatNTimes (Repeat v) (n - 1)
 
                 // Add repeats to ellipsized bindings to replicate inputs as necessary.
-                let reshapeBindings (bindings: Binding<'a> list) (renames: (string * string) list) (depths: IDictionary<string, int>) =
+                // @depths is the number of ellipses each identifier is followed by in the template
+                let reshapeBindings (bindings: MacroBinding<'a> list) (renames: (string * string) list) (depths: IDictionary<string, int>) =
                     // For each variable @x in the input pattern with corresponding, uniquely-named instances @x_1..@x_n in the template,
                     // map each @x_i to the set of values bound to @x in the input.
-                    let bindingsDict = dict <| List.map (fun (Binding (name, v)) -> (name, v)) bindings
+                    let bindingsDict = dict <| List.map (fun (MacroBinding (name, v)) -> (name, v)) bindings
                     let bindings = List.map (fun (old_name, new_name) -> (new_name, bindingsDict.[old_name])) renames
                     // If the number of ellipses following a variable in the template exceeds the number of ellipses following
                     // the variable in the input pattern, the bound values are repeated in the output.
@@ -523,7 +521,7 @@ module rec Parsing
                     let (template, renames) = renameIdentifiers boundVars template
                     // Get the number of ellipses each variable in @template is followed by
                     let depths = getEllipsisDepths template
-                    fun (bindings: Binding<LispData> list) (parse: LispData -> ExprParser<Expr>) ->
+                    fun (bindings: MacroBinding<LispData> list) (parse: LispData -> ExprParser<Expr>) ->
                         // Parse each matched datum in the context in which it appears.
                         let bindings = reshapeBindings bindings renames depths
                         let (expanded, _) = expand bindings template ()
