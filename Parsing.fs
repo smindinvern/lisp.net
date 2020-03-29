@@ -409,21 +409,7 @@ module rec Parsing
             module SyntaxRules =
                 let uniquify (s: string) = sprintf "%s#%i" s (nextI())
 
-                // For each pattern variable @x that appears in the template, rename each occurrence of @x so that
-                // if @x appears in two different locations, each followed by a different number of ellipses, we can
-                // repeat each one the appropriate number of times.
-                //
-                // Example:
-                // (define-syntax macro
-                //   (syntax-rules
-                //    () ((macro ((a b ...) ...))
-                //        '((a ... a b) ... ...)  ;; each occurrence of `a' is followed by 3 and 2 ellipses, respectively.
-                //        )
-                //    )
-                //   )
-                // (macro6 ((a b c) (d e f)))
-                //   => '((a d a b) (a d d c) (a d a e) (a d d f))
-                let rec renameIdentifiers' (bound: HashSet<string>) (ld: LispData) (renames: (string * string) list) =
+                let rec private renameIdentifiers' (bound: HashSet<string>) (ld: LispData) (renames: (string * string) list) =
                     match ld with
                     | Symbol s ->
                         if bound.Contains(s.sym) then
@@ -433,6 +419,28 @@ module rec Parsing
                             (Symbol s, renames)
                     | x -> foldLispData (renameIdentifiers' bound) renames x
 
+                /// <summary>
+                /// For each pattern variable @x that appears in the template, rename each occurrence of @x so that
+                /// if @x appears in two different locations, each followed by a different number of ellipses, we can
+                /// repeat each one the appropriate number of times.
+                /// </summary>
+                /// <param name="bound">Names of identifiers that are macro-bound.</param>
+                /// <param name="ld"><see cref="LispData"/> to process.</param>
+                /// <returns>
+                /// A list of <c>(oldName, newName)</c> pairs of identifiers that have been renamed in <paramref name="ld" />.
+                /// </returns>
+                /// <remarks>
+                /// <code>
+                /// (define-syntax macro
+                ///   (syntax-rules
+                ///    () ((macro ((a b ...) ...))
+                ///        '((a ... a b) ... ...)  ;; After renaming, this becomes '((a#1 ... a#2 b#3) ... ...)
+                ///                                ;; a#1 is followed by 3 ellipses, a#2 is followed by 2 ellipses.
+                ///        )
+                ///    )
+                ///   )
+                /// </code>
+                /// </remarks>
                 let renameIdentifiers (bound: HashSet<string>) (ld: LispData) =
                     renameIdentifiers' bound ld []
 
@@ -462,8 +470,20 @@ module rec Parsing
                     else
                         repeatNTimes (Repeat v) (n - 1)
 
-                // Add repeats to ellipsized bindings to replicate inputs as necessary.
-                // @depths is the number of ellipses each identifier is followed by in the template
+                /// <summary>
+                /// Add repeats to ellipsized <see cref="MacroBinding"/>s to replicate inputs as necessary.
+                /// </summary>
+                /// <param name="bindings">
+                /// List of identifiers and the values that were bound to them in the macro invocation.
+                /// </param>
+                /// <param name="renames">
+                /// List of <c>(oldName, newName)</c> pairs of identifiers that were renamed by <see cref="renameIdentifiers"/>.
+                /// </param>
+                /// <param name="depths">The number of ellipses each identifier is followed by in the template.</param>
+                /// <returns>
+                /// A mapping from each <c>newName</c> to its corresponding set of bound values, with repeats added
+                /// where necessary.
+                /// </returns>
                 let reshapeBindings (bindings: MacroBinding<'a> list) (renames: (string * string) list) (depths: IDictionary<string, int>) =
                     // For each variable @x in the input pattern with corresponding, uniquely-named instances @x_1..@x_n in the template,
                     // map each @x_i to the set of values bound to @x in the input.
