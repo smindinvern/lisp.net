@@ -249,13 +249,15 @@ module rec Parsing
                             (Ast.Symbol s, ())
                     | _ -> foldLispData f () ld
                 fst <| foldLispData f () ld
+
+            member private this.parseSymbol b = base.ParseSymbol b
             
             override this.ParseSymbol b =
                 state {
                     if b.sym.EndsWith('#') then
                         return! Parse((!b.ldr).Value)
                     else
-                        return! expressionParser.ParseSymbol b
+                        return! this.parseSymbol b
                 }
             
             override this.ParseQuote ld =
